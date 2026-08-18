@@ -36,8 +36,7 @@ function rangeStr(tier: Tier, symbol: string): string {
   return "?";
 }
 
-function ReasoningWithFootnotes({ text }: { text: string }) {
-  // Turn "...figure [1]..." into a superscript link jumping to the footnote anchor.
+function ReasoningWithFootnotes({ text, prefix }: { text: string; prefix: string }) {
   const parts = text.split(/(\[\d+\])/g);
   return (
     <p style={{ margin: 0 }}>
@@ -45,7 +44,7 @@ function ReasoningWithFootnotes({ text }: { text: string }) {
         const m = part.match(/^\[(\d+)\]$/);
         if (m) {
           return (
-            <a key={i} href={`#fn-market-${m[1]}`} style={{ fontSize: 11, verticalAlign: "super", fontWeight: 700 }}>
+            <a key={i} href={`#fn-${prefix}-${m[1]}`} style={{ fontSize: 11, verticalAlign: "super", fontWeight: 700 }}>
               [{m[1]}]
             </a>
           );
@@ -57,18 +56,70 @@ function ReasoningWithFootnotes({ text }: { text: string }) {
 }
 
 const TIER_COLOR: Record<string, string> = {
-  TAM: "#0f9d8f", // teal - matches brand accent
-  SAM: "#3b6fc4", // corporate blue
-  SOM: "#c0577a", // muted plum
+  TAM: "#0f9d8f",
+  SAM: "#3b6fc4",
+  SOM: "#c0577a",
 };
 
-export default function TamSamSomView({ data }: { data: TamSamSom }) {
+const ROWS_DEF = [
+  { level: "TAM", def: "Marché total adressable" },
+  { level: "SAM", def: "Part adressable sur nos zones ciblées" },
+  { level: "SOM", def: "Part captable de façon réaliste (3–5 ans)" },
+];
+
+export default function TamSamSomView({ data, variant = "card", footnotePrefix = "market" }: { data: TamSamSom; variant?: "card" | "document"; footnotePrefix?: string }) {
   const symbol = data.currency === "EUR" ? "€" : "$";
-  const rows: { level: string; def: string; tier: Tier }[] = [
-    { level: "TAM", def: "Marché total adressable", tier: data.tam },
-    { level: "SAM", def: "Part adressable sur nos zones ciblées", tier: data.sam },
-    { level: "SOM", def: "Part captable de façon réaliste (3–5 ans)", tier: data.som },
-  ];
+  const rows = ROWS_DEF.map((r) => ({ ...r, tier: (data as any)[r.level.toLowerCase()] as Tier }));
+
+  if (variant === "document") {
+    return (
+      <div className="doc-section">
+        <table className="doc-table">
+          <thead>
+            <tr>
+              <th>Niveau</th>
+              <th>Définition</th>
+              <th>Estimation</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.level}>
+                <td style={{ fontWeight: 700 }}>{r.level}</td>
+                <td>{r.def}</td>
+                <td>≈ {rangeStr(r.tier, symbol)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <p className="doc-italic">Le raisonnement suit une logique Top Down.</p>
+
+        {rows.map((r) => (
+          <div key={r.level} style={{ marginBottom: 10 }}>
+            <div className="doc-subhead" style={{ color: TIER_COLOR[r.level] }}>{r.level}</div>
+            <ReasoningWithFootnotes text={r.tier.reasoning || ""} prefix={footnotePrefix} />
+          </div>
+        ))}
+
+        {data.footnotes.length > 0 && (
+          <div className="doc-footnotes">
+            {data.footnotes.map((fn) => (
+              <div key={fn.n} id={`fn-${footnotePrefix}-${fn.n}`}>
+                <sup>{fn.n}</sup>{fn.detail}
+                {fn.source_url && (
+                  <>
+                    {" — "}
+                    <a href={fn.source_url} target="_blank" rel="noreferrer">{fn.source_name || fn.source_url}</a>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -97,7 +148,7 @@ export default function TamSamSomView({ data }: { data: TamSamSom }) {
           {rows.map((r) => (
             <div key={r.level}>
               <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4, color: TIER_COLOR[r.level] }}>{r.level}</div>
-              <ReasoningWithFootnotes text={r.tier.reasoning || "No detail provided."} />
+              <ReasoningWithFootnotes text={r.tier.reasoning || "No detail provided."} prefix={footnotePrefix} />
               {r.level === "SAM" && r.tier.pct_of_tam != null && (
                 <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 4 }}>
                   Appliqué au TAM : {(r.tier.pct_of_tam * 100).toFixed(0)}%
@@ -114,7 +165,7 @@ export default function TamSamSomView({ data }: { data: TamSamSom }) {
           {data.footnotes.length > 0 && (
             <div style={{ borderTop: "1px dashed var(--panel-border)", paddingTop: 10, marginTop: 4 }}>
               {data.footnotes.map((fn) => (
-                <div key={fn.n} id={`fn-market-${fn.n}`} style={{ fontSize: 11.5, color: "var(--text-dim)", marginBottom: 4 }}>
+                <div key={fn.n} id={`fn-${footnotePrefix}-${fn.n}`} style={{ fontSize: 11.5, color: "var(--text-dim)", marginBottom: 4 }}>
                   <sup style={{ fontWeight: 700 }}>{fn.n}</sup> {fn.detail}
                   {fn.source_url && (
                     <>

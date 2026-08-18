@@ -15,6 +15,8 @@ directly - consistent with spec section 53 ("no black box conclusions").
 """
 from __future__ import annotations
 
+import json
+
 from sqlalchemy.orm import Session
 
 from app.models import Company, ModuleResult, RedFlag, RedFlagSeverity, Memo, Recommendation
@@ -22,8 +24,8 @@ from app.services.llm_client import get_llm_client
 
 MODULES_IN_MEMO_ORDER = ["market", "competition", "traction", "founders"]
 MODULE_LABELS = {
-    "market": "Market",
-    "competition": "Competition & Moat",
+    "market": "Taille de marché (TAM / SAM / SOM)",
+    "competition": "Paysage concurrentiel",
     "traction": "Traction & Business Model",
     "founders": "Team & Background",
 }
@@ -70,12 +72,36 @@ def generate_memo(db: Session, company: Company) -> Memo:
     for module_key in MODULES_IN_MEMO_ORDER:
         mr = by_module.get(module_key)
         if not mr:
-            sections.append({"title": MODULE_LABELS[module_key], "body": "Not yet analyzed.", "evidence_ids": []})
+            sections.append({"title": MODULE_LABELS[module_key], "body": "Non analysé.", "evidence_ids": []})
             continue
-        body = mr.headline or "No conclusion yet."
+
+        # Market and competition carry a structured, document-ready payload (TAM/SAM/SOM table
+        # and reasoning, or the function x geography landscape matrix) - embed it directly so the
+        # memo reads like the analyst document it should be, not a one-line status string.
+        structured = None
+        if module_key == "market" and mr.platform_value:
+            try:
+                parsed = json.loads(mr.platform_value)
+                if isinstance(parsed, dict) and parsed.get("tam") and parsed.get("sam") and parsed.get("som"):
+                    structured = parsed
+            except (ValueError, TypeError):
+                pass
+        elif module_key == "competition" and mr.platform_value:
+            try:
+                parsed = json.loads(mr.platform_value)
+                if isinstance(parsed, dict) and parsed.get("matrix"):
+                    structured = parsed
+            except (ValueError, TypeError):
+                pass
+
+        if structured:
+            kind = "tam_sam_som" if module_key == "market" else "competitive_landscape"
+            sections.append({"title": MODULE_LABELS[module_key], "kind": kind, "data": structured, "body": "", "evidence_ids": mr.evidence_ids_json or []})
+            continue
+
+        body = mr.headline or "Pas encore de conclusion."
         if mr.discrepancy_explanation:
             body += f" | {mr.discrepancy_explanation}"
-        body += f" [status: {mr.status.value}]"
         sections.append({"title": MODULE_LABELS[module_key], "body": body, "evidence_ids": mr.evidence_ids_json or []})
 
     if red_flags:
@@ -104,10 +130,12 @@ def generate_memo(db: Session, company: Company) -> Memo:
     if llm.mode == "live" and sections:
         exec_summary = llm.reason(
             system=(
-                "You write a concise executive summary paragraph (max 120 words) for a VC investment memo. "
-                "You may ONLY use the facts given to you below - do not add any number, claim, or fact not present in them."
+                "You write the executive summary for a VC investment memo, in French, in the voice of a sharp "
+                "analyst: terse, declarative sentences, no hedging, no filler, no restating the question. "
+                "Max 60-80 words, 3-4 sentences. You may ONLY use the facts given to you below - do not add "
+                "any number, claim, or fact not present in them."
             ),
-            user="\n".join(f"{s['title']}: {s['body']}" for s in sections),
+            user="\n".join(f"{s['title']}: {s.get('body') or json.dumps(s.get('data'))}" for s in sections),
         )
         if exec_summary.text and exec_summary.mode == "live":
             sections.insert(1, {"title": "Executive Summary", "body": exec_summary.text.strip(), "evidence_ids": []})

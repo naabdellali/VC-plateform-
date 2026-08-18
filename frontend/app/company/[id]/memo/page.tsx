@@ -4,8 +4,17 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, Company, Memo } from "@/lib/api";
+import TamSamSomView from "@/components/TamSamSomView";
+import CompetitiveLandscapeView from "@/components/CompetitiveLandscapeView";
 
-const REC_COLORS: Record<string, string> = {
+const REC_LABEL: Record<string, string> = {
+  invest: "INVEST",
+  pass: "PASS",
+  watchlist: "WATCHLIST",
+  need_more_data: "NEED MORE DATA",
+};
+
+const REC_COLOR: Record<string, string> = {
   invest: "var(--status-complete)",
   pass: "var(--sev-critical)",
   watchlist: "var(--sev-major)",
@@ -44,14 +53,13 @@ export default function MemoPage() {
     }
   }
 
+  let sectionNumber = 0;
+
   return (
     <div className="container">
-      <div className="header">
-        <div>
-          <Link href={`/company/${companyId}`} className="no-print" style={{ fontSize: 12 }}>← Back to tray</Link>
-          <h1 style={{ marginTop: 6 }}>Investment memo{company?.name ? ` — ${company.name}` : ""}</h1>
-        </div>
-        <div className="no-print" style={{ display: "flex", gap: 10 }}>
+      <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", maxWidth: 860, margin: "0 auto 18px" }}>
+        <Link href={`/company/${companyId}`} style={{ fontSize: 12 }}>← Back to tray</Link>
+        <div style={{ display: "flex", gap: 10 }}>
           {memo && (
             <button className="btn-secondary" onClick={() => window.print()}>
               Download as PDF
@@ -63,43 +71,67 @@ export default function MemoPage() {
         </div>
       </div>
 
-      {error && <p style={{ color: "var(--sev-critical)" }}>{error}</p>}
+      {error && <p style={{ color: "var(--sev-critical)", maxWidth: 860, margin: "0 auto 14px" }}>{error}</p>}
 
       {notFound && !memo && (
-        <div className="panel">
+        <div className="panel" style={{ maxWidth: 860, margin: "0 auto" }}>
           <p>No memo generated yet. Click "Generate memo" once you've reviewed the modules on the tray.</p>
         </div>
       )}
 
       {memo && (
-        <>
+        <div className="doc-page">
+          <div className="doc-header">
+            <h1>{company?.name || "…"} — Investment Memo</h1>
+            <div className="doc-tags">
+              {(memo.sections_json || []).map((s) => s.title).join(" · ")}
+            </div>
+          </div>
+          <hr className="doc-rule" />
+
           {memo.recommendation && (
-            <div className="panel" style={{ borderColor: REC_COLORS[memo.recommendation] }}>
-              <div style={{ fontSize: 11, color: "var(--text-dim)", textTransform: "uppercase" }}>Recommendation</div>
-              <div style={{ fontSize: 24, fontWeight: 700, color: REC_COLORS[memo.recommendation] }}>
-                {memo.recommendation.replace(/_/g, " ").toUpperCase()}
-              </div>
+            <div className="doc-section" style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+              <span style={{ fontSize: 11, textTransform: "uppercase", color: "var(--text-dim)", letterSpacing: "0.04em" }}>Recommandation</span>
+              <span style={{ fontSize: 18, fontWeight: 800, color: REC_COLOR[memo.recommendation] }}>
+                {REC_LABEL[memo.recommendation] || memo.recommendation.toUpperCase()}
+              </span>
             </div>
           )}
 
-          {memo.sections_json?.map((s, i) => (
-            <div key={i} className="panel">
-              <h2>{s.title}</h2>
-              <p style={{ whiteSpace: "pre-wrap", fontSize: 13.5, lineHeight: 1.6 }}>{s.body}</p>
-            </div>
-          ))}
+          {memo.sections_json?.map((s, i) => {
+            if (s.kind === "tam_sam_som" || s.kind === "competitive_landscape") {
+              sectionNumber += 1;
+              return (
+                <div key={i}>
+                  <div className="doc-section-title">{sectionNumber}. {s.title}</div>
+                  {s.kind === "tam_sam_som" ? (
+                    <TamSamSomView data={s.data} variant="document" footnotePrefix={`memo-${i}`} />
+                  ) : (
+                    <CompetitiveLandscapeView data={s.data} variant="document" footnotePrefix={`memo-${i}`} />
+                  )}
+                </div>
+              );
+            }
+            sectionNumber += 1;
+            return (
+              <div key={i} className="doc-section">
+                <div className="doc-section-title">{sectionNumber}. {s.title}</div>
+                <p style={{ whiteSpace: "pre-wrap", fontSize: 13.5, lineHeight: 1.65, margin: 0 }}>{s.body}</p>
+              </div>
+            );
+          })}
 
           {memo.key_questions_json && memo.key_questions_json.length > 0 && (
-            <div className="panel">
-              <h2>Questions for the founders</h2>
-              <ul style={{ fontSize: 13.5, lineHeight: 1.7, paddingLeft: 20 }}>
+            <div className="doc-section">
+              <div className="doc-section-title">{sectionNumber + 1}. Questions pour les fondateurs</div>
+              <ul style={{ fontSize: 13.5, lineHeight: 1.7, paddingLeft: 20, margin: 0 }}>
                 {memo.key_questions_json.map((q, i) => (
                   <li key={i}>{q}</li>
                 ))}
               </ul>
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );

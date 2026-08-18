@@ -42,8 +42,19 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
     trace.add("extract", {"deck_named_competitors": list(deck_named)}, claim_evidence_ids)
 
     # --- 2. research: independent competitor discovery --------------------
-    landscape_q = f"Who are the direct and indirect competitors of a {company.business_model.value if company.business_model else ''} company in {company.sector or 'this sector'}, including incumbents and adjacent solutions?"
-    q1 = llm.generate_search_queries(landscape_q, {"sector": company.sector, "business_model": company.business_model.value if company.business_model else None})
+    # Sector-driven, not business_model-driven - see market_module for why business_model
+    # (a fixed workspace-form value, unrelated to the actual product) must not leak into
+    # research queries and bias them toward the wrong category.
+    if not company.sector:
+        upsert_module_result(
+            db, company, MODULE, status=ModuleStatus.insufficient_evidence,
+            headline="We can't map the competitive landscape yet - the company's sector/industry isn't known.",
+            deck_value=", ".join(list(deck_named)[:5]) if deck_named else None,
+            platform_value=None, discrepancy_explanation=None, trace=trace, llm_mode=llm.mode,
+        )
+        return
+    landscape_q = f"Who are the direct and indirect competitors in {company.sector}, including incumbents and adjacent solutions, by function and by region (France/Europe vs United States)?"
+    q1 = llm.generate_search_queries(landscape_q, {"sector": company.sector, "hq_country": company.hq_country})
     queries = (q1.parsed or {}).get("queries", [landscape_q]) if q1.parsed else [landscape_q]
 
     landscape_sources = []
@@ -102,6 +113,48 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             competitor_ids.append(comp_ev.id)
     trace.add("verify", {"structured_competitors_found": len(competitors_struct)}, competitor_ids)
 
+    # --- 2c. function x geography landscape matrix - the analyst-memo format ------------------
+    landscape_struct = None
+    platform_value = None
+    if landscape_sources:
+        matrix_result = llm.build_competitive_landscape({"sector": company.sector, "hq_country": company.hq_country}, landscape_sources)
+        matrix_payload = matrix_result.parsed or {"insufficient": True}
+        if not matrix_payload.get("insufficient"):
+            footnotes = []
+            for fn in matrix_payload.get("footnotes", []) or []:
+                idx = fn.get("source_index")
+                src = landscape_sources[idx] if isinstance(idx, int) and 0 <= idx < len(landscape_sources) else None
+                footnotes.append({
+                    "n": fn.get("n"), "detail": fn.get("detail"),
+                    "source_url": src["url"] if src else None, "source_name": src["title"] if src else None,
+                })
+            comparable = matrix_payload.get("closest_comparable") or {}
+            comp_idx = comparable.get("source_index")
+            comp_src = landscape_sources[comp_idx] if isinstance(comp_idx, int) and 0 <= comp_idx < len(landscape_sources) else None
+            landscape_struct = {
+                "functions": matrix_payload.get("functions") or [],
+                "geographies": matrix_payload.get("geographies") or ["France / Europe", "États-Unis"],
+                "matrix": matrix_payload.get("matrix") or [],
+                "closest_comparable": {
+                    "name": comparable.get("name"), "description": comparable.get("description"),
+                    "source_url": comp_src["url"] if comp_src else None, "source_name": comp_src["title"] if comp_src else None,
+                } if comparable.get("name") else None,
+                "differentiator": matrix_payload.get("differentiator"),
+                "risk": matrix_payload.get("risk"),
+                "footnotes": footnotes,
+            }
+            landscape_ev2 = add_evidence(
+                db, company_id=company.id, module=MODULE,
+                claim="Independent competitive landscape matrix (function x geography)",
+                value=json.dumps(landscape_struct), value_type="competitive_landscape_json",
+                origin=EvidenceOrigin.platform_inference,
+                source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
+                confidence=Confidence.medium,
+                methodology="LLM-mapped value-chain function x geography grid; a player is only placed in a cell if a source names them there.",
+            )
+            platform_value = json.dumps(landscape_struct)
+            trace.add("calculate", landscape_struct, [landscape_ev2.id])
+
     # --- 3. collision simulation: incumbent threat (spec section 9) -------
     collision_q = f"Has any large, well-capitalized incumbent already launched, tested, or explicitly abandoned a product similar to a {company.sector or ''} startup's offering? Why did they stop, if they did?"
     q2 = llm.generate_search_queries(collision_q, {"sector": company.sector})
@@ -153,13 +206,15 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             potential_impact="Omitting competitors may indicate an incomplete or overly favorable framing of the competitive landscape.",
         )
 
-    status = ModuleStatus.needs_review if (deck_named or landscape_payload.get("answer")) else ModuleStatus.insufficient_evidence
+    status = ModuleStatus.needs_review if (landscape_struct or competitors_struct or deck_named) else ModuleStatus.insufficient_evidence
     not_in_deck = sum(1 for c in competitors_struct if not c["in_deck"])
-    if competitors_struct:
-        headline = f"We independently identified {len(competitors_struct)} named competitor(s)"
-        headline += f", {not_in_deck} not mentioned in the deck." if not_in_deck else ", matching what the deck discloses."
-    elif landscape_payload.get("answer") and "unable to independently verify" not in landscape_payload["answer"].lower():
-        headline = "Independent research surfaced signal on the competitive landscape - no individually named competitors confirmed yet."
+    if landscape_struct and landscape_struct.get("closest_comparable"):
+        headline = f"Comparable le plus proche : {landscape_struct['closest_comparable']['name']}."
+        if not_in_deck:
+            headline += f" {not_in_deck} acteur(s) non mentionné(s) dans le deck."
+    elif competitors_struct:
+        headline = f"{len(competitors_struct)} concurrent(s) identifié(s) indépendamment"
+        headline += f", {not_in_deck} absent(s) du deck." if not_in_deck else "."
     elif deck_named:
         headline = f"Deck names {len(deck_named)} competitor(s); independent research was inconclusive."
     else:
@@ -168,6 +223,6 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
     upsert_module_result(
         db, company, MODULE, status=status, headline=headline,
         deck_value=", ".join(list(deck_named)[:5]) if deck_named else None,
-        platform_value=None, discrepancy_explanation=None,
+        platform_value=platform_value, discrepancy_explanation=None,
         trace=trace, llm_mode=llm.mode,
     )

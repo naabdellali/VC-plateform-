@@ -211,7 +211,10 @@ class LlmClient:
             '"sam": {"estimate": number, "pct_of_tam": number or null, "reasoning": "prose with markers"}, '
             '"som": {"estimate_low": number, "estimate_high": number, "capture_rate_low_pct": number, '
             '"capture_rate_high_pct": number, "reasoning": "prose, methodology convention not a citation"}, '
-            '"footnotes": [{"n": 1, "source_index": 0, "detail": "Source name, key figure quoted, short"}]}'
+            '"footnotes": [{"n": 1, "source_index": 0, "detail": "Source name, key figure quoted, short"}]} '
+            "Style: write like a sharp VC analyst memo, not an AI assistant - terse, declarative, no hedging "
+            "filler, no restating the question. Each of the three reasoning fields must be 2-4 sentences, "
+            "roughly 40-80 words - not more. State the number, state where it comes from, move on."
         )
         user = f"Company context: {json.dumps(company_context)}\n\nSources:\n" + json.dumps(sources, indent=2)[:14000]
         if self.mode == "mock":
@@ -220,6 +223,45 @@ class LlmClient:
                 parsed={"insufficient": True, "reason": "No live research/LLM provider configured - mock mode."},
             )
         return self._call_json(system, user, max_tokens=3000)
+
+    # ------------------------------------------------------------------
+    # 3a2. Competitive landscape as a function x geography matrix - the
+    #      format a sharp analyst actually writes (who covers which slice
+    #      of the value chain, where), not a flat list of logos. Every
+    #      named player must come from a source; empty cells are left
+    #      explicitly empty rather than filled with a guess.
+    # ------------------------------------------------------------------
+    def build_competitive_landscape(self, company_context: dict, sources: list[dict]) -> LlmResult:
+        system = (
+            "You are a sharp VC analyst mapping the competitive landscape for a startup, using ONLY the "
+            "provided sources. Break the value chain into 3-5 functions/capabilities relevant to this "
+            "category (e.g. for an AI tooling company: governance, observability, guardrails, gateway, "
+            "usage billing - adapt to the actual category). For each function, list which named players "
+            "cover it in each of two geography buckets: 'France / Europe' and 'États-Unis'. Only name a "
+            "player in a cell if a source explicitly places them there; otherwise write 'Quasi absent' or "
+            "'—' rather than guessing. "
+            "Then identify the single closest comparable company (same country/region as the target if "
+            "possible), state its key facts (funding, notable clients) ONLY if sourced, and write one sharp "
+            "sentence on what differentiates the target and one sharp sentence on the main competitive risk "
+            "- both may be analytical judgment, but label them as such, not as sourced fact. "
+            'Return ONLY JSON: {"functions": ["..."], "geographies": ["France / Europe", "États-Unis"], '
+            '"matrix": [{"function": "...", "cells": {"France / Europe": "names or Quasi absent", '
+            '"États-Unis": "names or Quasi absent"}}], '
+            '"closest_comparable": {"name": "...", "description": "1-2 sentences, sourced facts only", '
+            '"source_index": 0 or null}, '
+            '"differentiator": "1 sharp sentence, analyst judgment", "risk": "1 sharp sentence, analyst judgment", '
+            '"footnotes": [{"n": 1, "source_index": 0, "detail": "Source name, key figure quoted, short"}]} '
+            "Style: terse, declarative, like a real analyst memo - no hedging, no filler, no restating the "
+            "question. If the sources are too thin to build any of this, return "
+            '{"insufficient": true, "reason": "..."}.'
+        )
+        user = f"Company context: {json.dumps(company_context)}\n\nSources:\n" + json.dumps(sources, indent=2)[:14000]
+        if self.mode == "mock":
+            return LlmResult(
+                mode="mock", text=MOCK_DISCLAIMER,
+                parsed={"insufficient": True, "reason": "No live research/LLM provider configured - mock mode."},
+            )
+        return self._call_json(system, user, max_tokens=2500)
 
     # ------------------------------------------------------------------
     # 3b. Structured competitor identification - used to render an actual

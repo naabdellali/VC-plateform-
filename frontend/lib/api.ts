@@ -65,7 +65,7 @@ export type RedFlag = {
 export type Memo = {
   id: string;
   version: string;
-  sections_json: { title: string; body: string; evidence_ids: string[] }[] | null;
+  sections_json: { title: string; body: string; evidence_ids: string[]; kind?: string; data?: any }[] | null;
   recommendation: string | null;
   key_questions_json: string[] | null;
   generated_at: string | null;

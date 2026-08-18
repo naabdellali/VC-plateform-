@@ -209,7 +209,34 @@ label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 
   color: var(--conf-medium); padding: 11px 16px; border-radius: 12px; font-size: 12.5px; margin-bottom: 20px;
 }
 
+/* --- Document-style pages (investment memo, printable analyst format) --- */
+.doc-page {
+  background: #ffffff; border: 1px solid var(--panel-border); border-radius: 6px;
+  max-width: 860px; margin: 0 auto; padding: 56px 64px 64px; box-shadow: var(--shadow-md);
+}
+.doc-header { margin-bottom: 8px; }
+.doc-header h1 { font-size: 25px; font-weight: 800; margin: 0; letter-spacing: -0.01em; }
+.doc-header .doc-tags { font-size: 12.5px; font-style: italic; color: var(--text-dim); margin-top: 4px; }
+.doc-rule { height: 2px; background: var(--accent); border: none; margin: 14px 0 28px; }
+.doc-section { margin-bottom: 30px; }
+.doc-section-title { font-size: 16.5px; font-weight: 800; margin: 0 0 12px; }
+.doc-italic { font-size: 12.5px; font-style: italic; color: var(--text-dim); margin: 10px 0 16px; }
+.doc-subhead { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 3px; }
+.doc-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 6px; }
+.doc-table th {
+  background: var(--accent); color: #ffffff; text-align: left; font-weight: 700;
+  padding: 7px 10px; font-size: 12px;
+}
+.doc-table td { padding: 7px 10px; border-bottom: 1px solid #eef0f5; vertical-align: top; }
+.doc-table tr:nth-child(even) td { background: #fafbfd; }
+.doc-table-card { font-size: 12.5px; }
+.doc-footnotes { border-top: 1px solid #e4e7f0; margin-top: 14px; padding-top: 8px; }
+.doc-footnotes div { font-size: 10.5px; color: var(--text-dim); line-height: 1.6; margin-bottom: 2px; }
+.doc-footnotes sup { font-weight: 700; margin-right: 3px; }
+.doc-toolbar { display: flex; justify-content: flex-end; gap: 10px; max-width: 860px; margin: 0 auto 14px; }
+
 @media print {
+  .doc-page { box-shadow: none; border: none; max-width: none; padding: 0; }
   .no-print { display: none !important; }
   body { background: white; }
   .panel, .hero { box-shadow: none; border: 1px solid #ddd; }

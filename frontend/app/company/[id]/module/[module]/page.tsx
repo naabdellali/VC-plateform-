@@ -11,6 +11,7 @@ import MarketRecalculateForm from "@/components/MarketRecalculateForm";
 import TractionForensicsForms from "@/components/TractionForensicsForms";
 import CompetitorGrid from "@/components/CompetitorGrid";
 import TamSamSomView, { TamSamSom } from "@/components/TamSamSomView";
+import CompetitiveLandscapeView, { CompetitiveLandscape } from "@/components/CompetitiveLandscapeView";
 
 const MODULE_LABELS: Record<string, string> = {
   market: "Market Analysis",
@@ -69,7 +70,20 @@ export default function ModuleDetailPage() {
     return null;
   }, [module, hasResult, result]);
 
-  const platformDisplay = hasResult && !tamSamSom ? formatMoneyMaybe((result as ModuleResult).platform_value) : null;
+  const landscape = useMemo<CompetitiveLandscape | null>(() => {
+    if (module !== "competition" || !hasResult) return null;
+    const raw = (result as ModuleResult).platform_value;
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.matrix) return parsed as CompetitiveLandscape;
+    } catch {
+      /* not JSON */
+    }
+    return null;
+  }, [module, hasResult, result]);
+
+  const platformDisplay = hasResult && !tamSamSom && !landscape ? formatMoneyMaybe((result as ModuleResult).platform_value) : null;
   const deckDisplay = hasResult ? formatMoneyMaybe((result as ModuleResult).deck_value) : null;
 
   return (
@@ -96,6 +110,8 @@ export default function ModuleDetailPage() {
 
           {module === "market" && tamSamSom ? (
             <TamSamSomView data={tamSamSom} />
+          ) : module === "competition" && landscape ? (
+            <CompetitiveLandscapeView data={landscape} />
           ) : module === "competition" && competitors.length > 0 ? (
             <>
               <CompetitorGrid competitors={competitors} />
@@ -115,7 +131,7 @@ export default function ModuleDetailPage() {
             <p className="hero-empty">{(result as ModuleResult).headline}</p>
           )}
 
-          {module !== "market" && (deckDisplay || (module === "competition" && (result as ModuleResult).deck_value)) && (
+          {module !== "market" && !landscape && (deckDisplay || (module === "competition" && (result as ModuleResult).deck_value)) && (
             <div className="hero-secondary">
               <div>
                 <div className="item-label">What the deck says</div>
