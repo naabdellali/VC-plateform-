@@ -1,0 +1,205 @@
+"""
+LLM abstraction (spec section 54: "use LLMs for extraction, research
+synthesis, qualitative reasoning, classification, contradiction detection,
+assumption extraction, hypothesis generation - NOT for arithmetic").
+
+Every public method here returns data, never a persisted Evidence row -
+the reasoning modules (services/reasoning/*) are the ones that decide how
+to turn an LLM output into an Evidence row with an origin/confidence/tier.
+
+MOCK MODE: if ANTHROPIC_API_KEY is not set, every method returns a
+deterministic, clearly-labelled stub instead of raising - the whole
+pipeline stays runnable end-to-end (upload -> modules -> memo) without any
+key configured, which is what lets this repo be cloned and exercised
+immediately. Nothing produced in mock mode is ever framed as verified;
+callers must propagate `mode == "mock"` into the resulting Evidence rows.
+"""
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+
+from app.config import get_settings
+
+settings = get_settings()
+
+MOCK_DISCLAIMER = "[MOCK MODE - no ANTHROPIC_API_KEY configured, this is a placeholder, not a verified answer]"
+
+
+@dataclass
+class LlmResult:
+    mode: str  # "live" | "mock"
+    text: str
+    parsed: dict | list | None = None
+
+
+def _strip_code_fences(text: str) -> str:
+    text = text.strip()
+    text = re.sub(r"^```(json)?", "", text).strip()
+    text = re.sub(r"```$", "", text).strip()
+    return text
+
+
+class LlmClient:
+    def __init__(self):
+        self._client = None
+        if settings.llm_available:
+            import anthropic
+
+            self._client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+    @property
+    def mode(self) -> str:
+        return "live" if self._client else "mock"
+
+    def _call(self, system: str, user: str, max_tokens: int = 2000) -> str:
+        if not self._client:
+            raise RuntimeError("LLM client called in mock mode - callers must branch on .mode before calling _call")
+        resp = self._client.messages.create(
+            model=settings.anthropic_model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return "".join(block.text for block in resp.content if block.type == "text")
+
+    def _call_json(self, system: str, user: str, max_tokens: int = 2000) -> LlmResult:
+        if not self._client:
+            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed=None)
+        raw = self._call(system + "\n\nRespond ONLY with valid JSON. No prose, no markdown fences.", user, max_tokens)
+        cleaned = _strip_code_fences(raw)
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError:
+            parsed = None
+        return LlmResult(mode="live", text=raw, parsed=parsed)
+
+    # ------------------------------------------------------------------
+    # 1. Extraction: deck text -> typed claims
+    # ------------------------------------------------------------------
+    def extract_claims(self, deck_text: str) -> LlmResult:
+        system = (
+            "You are an extraction engine for a VC due-diligence platform. "
+            "Read a pitch deck's raw text and extract every material, checkable claim. "
+            "Return a JSON array of objects: "
+            '{"category": one of ["market_size","competitors","traction_metric","team_background",'
+            '"financials","business_model","fundraising_history","other"], '
+            '"claim": short human-readable statement, "value": the raw number/text if any, '
+            '"slide_reference": best-guess slide number or null}. '
+            "Do not infer anything not stated in the text. Do not invent numbers."
+        )
+        if self.mode == "mock":
+            return self._mock_extract_claims(deck_text)
+        return self._call_json(system, deck_text[:15000])
+
+    def _mock_extract_claims(self, deck_text: str) -> LlmResult:
+        # Deterministic, regex-based stand-in so the pipeline is exercisable
+        # without an API key. Clearly inferior to the real LLM extraction -
+        # that's the point of labelling it mock.
+        claims = []
+        for m in re.finditer(r"(TAM|SAM|SOM|market)[^\n\d]{0,40}([\€\$]?\s?\d[\d.,]*\s?(bn|billion|m|million|k)?)", deck_text, re.IGNORECASE):
+            claims.append({"category": "market_size", "claim": m.group(0).strip(), "value": m.group(2), "slide_reference": None})
+        for m in re.finditer(r"(MRR|ARR)[^\n\d]{0,40}([\€\$]?\s?\d[\d.,]*\s?(k|m|million)?)", deck_text, re.IGNORECASE):
+            claims.append({"category": "traction_metric", "claim": m.group(0).strip(), "value": m.group(2), "slide_reference": None})
+        for line in deck_text.splitlines():
+            if re.search(r"\bcompetitor", line, re.IGNORECASE):
+                claims.append({"category": "competitors", "claim": line.strip()[:200], "value": line.strip()[:200], "slide_reference": None})
+            if re.search(r"\b(CEO|CTO|CO-?FOUNDER|founder)\b", line, re.IGNORECASE):
+                claims.append({"category": "team_background", "claim": line.strip()[:200], "value": None, "slide_reference": None})
+        return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed=claims)
+
+    # ------------------------------------------------------------------
+    # 2. Contextual query generation (spec section 40)
+    # ------------------------------------------------------------------
+    def generate_search_queries(self, question: str, context: dict) -> LlmResult:
+        system = (
+            "You generate precise, contextual web-search queries for investment research. "
+            "Never generate generic queries. Use the company's sector, geography, stage and "
+            "business model to make each query as specific as possible. "
+            'Return JSON: {"queries": ["...", "..."]} with 2-4 queries.'
+        )
+        user = f"Question: {question}\nContext: {json.dumps(context)}"
+        if self.mode == "mock":
+            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"queries": [question]})
+        return self._call_json(system, user)
+
+    # ------------------------------------------------------------------
+    # 3. Research synthesis (spec section 42-43: produces an evidence-ready payload)
+    # ------------------------------------------------------------------
+    def synthesize_research(self, question: str, sources: list[dict]) -> LlmResult:
+        system = (
+            "You synthesize web research results into a sourced answer for a VC investor. "
+            "You may ONLY use the provided sources - never your own background knowledge for "
+            "factual/numeric claims. If sources conflict, surface the conflict, do not silently pick one. "
+            "If the sources do not answer the question, say so explicitly. "
+            'Return JSON: {"answer": "...", "confidence": "high"|"medium"|"low"|"unverified", '
+            '"citations": [source indices used, 0-based], "conflicting": true|false, '
+            '"conflict_note": "..." or null}'
+        )
+        user = f"Question: {question}\n\nSources:\n" + json.dumps(sources, indent=2)[:12000]
+        if self.mode == "mock":
+            return LlmResult(
+                mode="mock",
+                text=MOCK_DISCLAIMER,
+                parsed={
+                    "answer": "Unable to independently verify - no live research provider configured.",
+                    "confidence": "unverified",
+                    "citations": [],
+                    "conflicting": False,
+                    "conflict_note": None,
+                },
+            )
+        return self._call_json(system, user)
+
+    # ------------------------------------------------------------------
+    # 4. Contradiction detection (spec section 46)
+    # ------------------------------------------------------------------
+    def detect_contradictions(self, evidence_items: list[dict]) -> LlmResult:
+        system = (
+            "You audit a list of evidence items (claims, calculated values, external facts) "
+            "for internal contradictions. Only flag genuine, explainable contradictions - not "
+            "differences of methodology already labelled as such. "
+            'Return JSON: {"contradictions": [{"description": "...", "evidence_a": idx, '
+            '"evidence_b": idx, "severity": "critical"|"major"|"watch"}]}'
+        )
+        user = json.dumps(evidence_items, indent=2)[:12000]
+        if self.mode == "mock":
+            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"contradictions": []})
+        return self._call_json(system, user)
+
+    # ------------------------------------------------------------------
+    # 5. Assumption decomposition (spec section 47)
+    # ------------------------------------------------------------------
+    def decompose_assumptions(self, claim: str, context: dict) -> LlmResult:
+        system = (
+            "Given a management projection or claim, decompose it into the concrete, checkable "
+            "assumptions that would need to be true for it to hold (e.g. number of customers, "
+            "ACV, conversion rate, sales capacity, retention). "
+            'Return JSON: {"assumptions": [{"assumption": "...", "plausibility": "plausible"|'
+            '"aggressive"|"implausible", "reason": "..."}]}'
+        )
+        user = f"Claim: {claim}\nContext: {json.dumps(context)}"
+        if self.mode == "mock":
+            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"assumptions": []})
+        return self._call_json(system, user)
+
+    # ------------------------------------------------------------------
+    # 6. Generic qualitative reasoning step (used for the "investment
+    #    implication" step of the reasoning loop, and for memo prose)
+    # ------------------------------------------------------------------
+    def reason(self, system: str, user: str, max_tokens: int = 1500) -> LlmResult:
+        if self.mode == "mock":
+            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed=None)
+        text = self._call(system, user, max_tokens)
+        return LlmResult(mode="live", text=text, parsed=None)
+
+
+_llm_singleton: LlmClient | None = None
+
+
+def get_llm_client() -> LlmClient:
+    global _llm_singleton
+    if _llm_singleton is None:
+        _llm_singleton = LlmClient()
+    return _llm_singleton
