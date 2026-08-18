@@ -84,17 +84,31 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
     trace.add("extract", {"claims_found": len(market_claims), "deck_value_eur": deck_value}, deck_evidence_ids)
 
     # --- 2. research: TAM/adjacent-market sources + a geography/segment split ------------------
+    # Deliberately does NOT include company.business_model here: the workspace form defaults it
+    # to a fixed value that has nothing to do with market sizing, and letting it leak into this
+    # context biased query generation toward the wrong industry entirely (e.g. "SaaS market" for
+    # a real-estate services company). Sector - freshly inferred from the deck above if it was
+    # blank - is what actually drives what gets searched for.
     context = {
         "sector": company.sector, "hq_country": company.hq_country,
-        "business_model": company.business_model.value if company.business_model else None,
         "stage": company.stage.value if company.stage else None,
     }
+    if not company.sector:
+        # No sector on record and the deck didn't make it inferable either - don't guess a market.
+        trace.add("identify_unknowns", ["Company sector is unknown - cannot ground a TAM/SAM/SOM search in the right industry."])
+        upsert_module_result(
+            db, company, MODULE, status=ModuleStatus.insufficient_evidence,
+            headline="We can't independently size this market yet - the company's sector/industry isn't known. Set it on the company workspace and re-upload.",
+            deck_value=str(deck_value) if deck_value else None, platform_value=None, discrepancy_explanation=None,
+            trace=trace, llm_mode=llm.mode,
+        )
+        return
     tam_q = (
-        f"What is the total addressable market (TAM) size and growth forecast for "
-        f"{company.sector or 'this company'}'s sector? If no report covers this exact niche, include the "
-        "closest adjacent or comparable market categories and their sizes."
+        f"What is the total addressable market (TAM) size and growth forecast for the following industry: "
+        f"{company.sector}? If no report covers this exact niche, include the closest adjacent or comparable "
+        "market categories and their sizes."
     )
-    geo_q = f"What percentage share of the {company.sector or 'this'} market is in North America vs Europe vs rest of world?"
+    geo_q = f"What percentage share of the {company.sector} market is in North America vs Europe vs rest of world?"
     q1 = llm.generate_search_queries(tam_q, context)
     queries = (q1.parsed or {}).get("queries", [tam_q]) if q1.parsed else [tam_q]
     queries = list(queries[:3]) + [geo_q]

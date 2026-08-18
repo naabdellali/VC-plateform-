@@ -56,6 +56,12 @@ function ReasoningWithFootnotes({ text }: { text: string }) {
   );
 }
 
+const TIER_COLOR: Record<string, string> = {
+  TAM: "#0f9d8f", // teal - matches brand accent
+  SAM: "#3b6fc4", // corporate blue
+  SOM: "#c0577a", // muted plum
+};
+
 export default function TamSamSomView({ data }: { data: TamSamSom }) {
   const symbol = data.currency === "EUR" ? "€" : "$";
   const rows: { level: string; def: string; tier: Tier }[] = [
@@ -66,12 +72,18 @@ export default function TamSamSomView({ data }: { data: TamSamSom }) {
 
   return (
     <div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 4 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginBottom: 4 }}>
         {rows.map((r) => (
-          <div key={r.level} style={{ border: "1px solid var(--panel-border)", borderRadius: 12, padding: "14px 16px", background: "#fbfcfe" }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent-strong)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{r.level}</div>
-            <div style={{ fontSize: 11.5, color: "var(--text-dim)", margin: "3px 0 8px" }}>{r.def}</div>
-            <div style={{ fontSize: 20, fontWeight: 700 }}>{rangeStr(r.tier, symbol)}</div>
+          <div
+            key={r.level}
+            style={{
+              border: "1px solid var(--panel-border)", borderTop: `4px solid ${TIER_COLOR[r.level]}`,
+              borderRadius: 14, padding: "20px 20px 18px", background: "#fbfcfe",
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 800, color: TIER_COLOR[r.level], textTransform: "uppercase", letterSpacing: "0.06em" }}>{r.level}</div>
+            <div style={{ fontSize: 12, color: "var(--text-dim)", margin: "4px 0 10px" }}>{r.def}</div>
+            <div style={{ fontSize: 28, fontWeight: 800, color: "var(--text)", letterSpacing: "-0.01em" }}>{rangeStr(r.tier, symbol)}</div>
           </div>
         ))}
       </div>
@@ -84,7 +96,7 @@ export default function TamSamSomView({ data }: { data: TamSamSom }) {
         <div className="collapsible-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {rows.map((r) => (
             <div key={r.level}>
-              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>{r.level}</div>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4, color: TIER_COLOR[r.level] }}>{r.level}</div>
               <ReasoningWithFootnotes text={r.tier.reasoning || "No detail provided."} />
               {r.level === "SAM" && r.tier.pct_of_tam != null && (
                 <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 4 }}>

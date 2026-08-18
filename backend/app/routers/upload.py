@@ -49,6 +49,15 @@ async def upload_deck(
         company.legal_name = legal_name
 
     llm = get_llm_client()
+
+    # If nobody typed a sector in the workspace form, read it off the deck itself rather than
+    # leaving every downstream research query (market sizing, competitors) guessing blind.
+    if not company.sector:
+        sector_result = llm.infer_sector(parsed.raw_text)
+        inferred_sector = (sector_result.parsed or {}).get("sector")
+        if inferred_sector:
+            company.sector = inferred_sector
+
     extraction = llm.extract_claims(parsed.raw_text)
     extracted_claims = extraction.parsed if isinstance(extraction.parsed, list) else []
 

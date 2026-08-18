@@ -10,7 +10,7 @@ from app.rules.stage_rules import get_stage_priorities
 router = APIRouter(prefix="/companies", tags=["companies"])
 
 TRAY_MODULES = [
-    ("market", "Market"),
+    ("market", "Market Analysis"),
     ("competition", "Competition & Moat"),
     ("traction", "Traction & Business Model"),
     ("founders", "Team & Background"),

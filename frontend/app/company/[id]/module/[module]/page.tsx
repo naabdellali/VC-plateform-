@@ -13,7 +13,7 @@ import CompetitorGrid from "@/components/CompetitorGrid";
 import TamSamSomView, { TamSamSom } from "@/components/TamSamSomView";
 
 const MODULE_LABELS: Record<string, string> = {
-  market: "Market",
+  market: "Market Analysis",
   competition: "Competition & Moat",
   traction: "Traction & Business Model",
   founders: "Team & Background",

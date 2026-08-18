@@ -110,6 +110,32 @@ class LlmClient:
         return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed=claims)
 
     # ------------------------------------------------------------------
+    # 1b. Sector inference - the company workspace form's "Sector" field is
+    #     free text and often left blank; every downstream research query
+    #     (market sizing, competitors) is only as good as this, so if it's
+    #     missing we read it off the deck itself instead of researching
+    #     the wrong industry. Deliberately NOT read from a fixed enum -
+    #     a specific, real phrase ("cleaning & maintenance services for
+    #     residential/commercial real estate") is far more useful for
+    #     search than a generic category, and prevents the module from
+    #     silently defaulting to whatever the workspace's business_model
+    #     field happens to be set to.
+    # ------------------------------------------------------------------
+    def infer_sector(self, deck_text: str) -> LlmResult:
+        system = (
+            "Read this pitch deck's raw text and identify, as precisely as possible, the actual "
+            "industry/market the company operates in - based only on what the deck describes, never "
+            "a generic guess. Prefer a specific descriptive phrase over a broad category "
+            "(e.g. 'cleaning and maintenance services for residential and commercial real estate', "
+            "not just 'real estate' or 'services'). "
+            'Return JSON: {"sector": "..." or null if the deck genuinely does not make this clear, '
+            '"confidence": "high"|"medium"|"low"}'
+        )
+        if self.mode == "mock":
+            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"sector": None, "confidence": "unverified"})
+        return self._call_json(system, deck_text[:8000])
+
+    # ------------------------------------------------------------------
     # 2. Contextual query generation (spec section 40)
     # ------------------------------------------------------------------
     def generate_search_queries(self, question: str, context: dict) -> LlmResult:
