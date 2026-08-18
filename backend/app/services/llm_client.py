@@ -153,6 +153,32 @@ class LlmClient:
         return self._call_json(system, user)
 
     # ------------------------------------------------------------------
+    # 3b. Structured competitor identification - used to render an actual
+    #     comparison grid in the UI instead of a wall of prose. Strictly
+    #     source-restricted: a competitor only appears here if a source
+    #     explicitly names it, and "domain" is only filled in when a
+    #     source makes it unambiguous - never guessed, so the frontend can
+    #     safely use it for a logo lookup without fabricating anything.
+    # ------------------------------------------------------------------
+    def identify_competitors(self, question: str, sources: list[dict]) -> LlmResult:
+        system = (
+            "You extract a structured list of named competitors for a startup, using ONLY the "
+            "provided web-search sources - never your own background knowledge, and never invent "
+            "a competitor that is not explicitly named in the sources. "
+            "For each competitor include a website domain ONLY if it is stated in or unambiguous "
+            "from the source content/URL; otherwise use null - do not guess a domain. "
+            'Return JSON: {"competitors": [{"name": "...", "description": "one factual sentence '
+            'grounded in the sources", "domain": "example.com" or null, "source_index": 0}], '
+            '"confidence": "high"|"medium"|"low"|"unverified"}. '
+            "Return at most 8 competitors, most relevant first. If none are explicitly named in "
+            "the sources, return an empty list rather than guessing."
+        )
+        user = f"Question: {question}\n\nSources:\n" + json.dumps(sources, indent=2)[:12000]
+        if self.mode == "mock":
+            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"competitors": [], "confidence": "unverified"})
+        return self._call_json(system, user)
+
+    # ------------------------------------------------------------------
     # 4. Contradiction detection (spec section 46)
     # ------------------------------------------------------------------
     def detect_contradictions(self, evidence_items: list[dict]) -> LlmResult:

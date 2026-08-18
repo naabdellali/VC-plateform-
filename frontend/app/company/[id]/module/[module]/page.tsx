@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, ModuleResult, Evidence } from "@/lib/api";
@@ -9,6 +9,7 @@ import EvidenceList from "@/components/EvidenceList";
 import ReasoningTraceView from "@/components/ReasoningTrace";
 import MarketRecalculateForm from "@/components/MarketRecalculateForm";
 import TractionForensicsForms from "@/components/TractionForensicsForms";
+import CompetitorGrid from "@/components/CompetitorGrid";
 
 const MODULE_LABELS: Record<string, string> = {
   market: "Market",
@@ -16,6 +17,13 @@ const MODULE_LABELS: Record<string, string> = {
   traction: "Traction & Business Model",
   founders: "Team & Background",
 };
+
+function formatMoneyMaybe(raw: string | null): string | null {
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return raw;
+  return `${n.toLocaleString(undefined, { maximumFractionDigits: 0 })} EUR`;
+}
 
 export default function ModuleDetailPage() {
   const params = useParams<{ id: string; module: string }>();
@@ -33,6 +41,22 @@ export default function ModuleDetailPage() {
 
   useEffect(() => refresh(), [refresh]);
 
+  const competitors = useMemo(() => {
+    if (module !== "competition") return [];
+    const row = evidence.find((e) => e.value_type === "competitor_list_json");
+    if (!row || !row.value) return [];
+    try {
+      return JSON.parse(row.value);
+    } catch {
+      return [];
+    }
+  }, [evidence, module]);
+
+  const hasResult = result && result !== "not_found";
+  const isInsufficient = hasResult && (result as ModuleResult).status === "insufficient_evidence";
+  const platformDisplay = hasResult ? formatMoneyMaybe((result as ModuleResult).platform_value) : null;
+  const deckDisplay = hasResult ? formatMoneyMaybe((result as ModuleResult).deck_value) : null;
+
   return (
     <div className="container">
       <div className="header">
@@ -46,62 +70,101 @@ export default function ModuleDetailPage() {
 
       {result === "not_found" && <p style={{ color: "var(--text-dim)" }}>This module has not been analyzed yet.</p>}
 
-      {result && result !== "not_found" && (
-        <div className="panel">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <h2>Conclusion</h2>
-            <StatusBadge status={result.status} />
+      {hasResult && (
+        <div className="hero">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+            <div className="hero-label">
+              {module === "competition" ? "What we found independently" : "Our independent conclusion"}
+            </div>
+            <StatusBadge status={(result as ModuleResult).status} />
           </div>
-          <p>{result.headline}</p>
-          {(result.deck_value || result.platform_value) && (
-            <div style={{ display: "flex", gap: 24, marginTop: 8, fontSize: 13 }}>
-              {result.deck_value && (
-                <div>
-                  <div style={{ color: "var(--text-dim)", fontSize: 11 }}>DECK CLAIMS</div>
-                  <div style={{ fontWeight: 600 }}>{result.deck_value}</div>
+
+          {module === "competition" && competitors.length > 0 ? (
+            <>
+              <CompetitorGrid competitors={competitors} />
+              <p className="hero-note">{(result as ModuleResult).headline}</p>
+            </>
+          ) : isInsufficient ? (
+            <p className="hero-empty">
+              Not enough information to conclude yet. {(result as ModuleResult).headline}
+              {module === "market" && " Use “Refine this estimate” below to calculate it with real inputs."}
+            </p>
+          ) : platformDisplay ? (
+            <>
+              <div className="hero-value">{platformDisplay}</div>
+              <p className="hero-note">{(result as ModuleResult).discrepancy_explanation || (result as ModuleResult).headline}</p>
+            </>
+          ) : (
+            <p className="hero-empty">{(result as ModuleResult).headline}</p>
+          )}
+
+          {(deckDisplay || (module === "competition" && (result as ModuleResult).deck_value)) && (
+            <div className="hero-secondary">
+              <div>
+                <div className="item-label">What the deck says</div>
+                <div className="item-value">
+                  {module === "competition" ? (result as ModuleResult).deck_value || "Nothing named" : deckDisplay}
                 </div>
-              )}
-              {result.platform_value && (
+              </div>
+              {platformDisplay && (
                 <div>
-                  <div style={{ color: "var(--text-dim)", fontSize: 11 }}>PLATFORM ESTIMATE</div>
-                  <div style={{ fontWeight: 600, color: "var(--accent)" }}>{result.platform_value}</div>
+                  <div className="item-label">Our estimate</div>
+                  <div className="item-value" style={{ color: "var(--accent-strong)" }}>{platformDisplay}</div>
                 </div>
               )}
             </div>
           )}
-          {result.discrepancy_explanation && (
-            <p style={{ marginTop: 10, fontSize: 13, color: "var(--text-dim)" }}>{result.discrepancy_explanation}</p>
-          )}
-          <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 8 }}>
-            Produced in {result.llm_mode === "mock" ? "MOCK MODE (no live LLM configured)" : "live mode"}.
+
+          <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 14 }}>
+            {(result as ModuleResult).llm_mode === "mock" ? "Produced in mock mode (no live LLM configured)." : "Produced in live mode."}
           </div>
         </div>
       )}
 
       {module === "market" && (
-        <MarketRecalculateForm companyId={companyId} onDone={refresh} />
+        <details className="collapsible">
+          <summary>
+            Refine this estimate
+            <span className="summary-sub">optional — supply real inputs to calculate a defensible TAM</span>
+          </summary>
+          <div className="collapsible-body">
+            <MarketRecalculateForm companyId={companyId} onDone={refresh} />
+          </div>
+        </details>
       )}
       {module === "traction" && (
-        <TractionForensicsForms companyId={companyId} onDone={refresh} />
+        <details className="collapsible">
+          <summary>
+            Add real traction figures
+            <span className="summary-sub">optional — run MRR quality and CAC/LTV checks</span>
+          </summary>
+          <div className="collapsible-body">
+            <TractionForensicsForms companyId={companyId} onDone={refresh} />
+          </div>
+        </details>
       )}
 
-      {result && result !== "not_found" && (
-        <div className="panel">
-          <h2>Reasoning trace</h2>
-          <p style={{ fontSize: 12, color: "var(--text-dim)", marginTop: -8 }}>
-            extract → identify unknowns → research → verify → calculate → benchmark → reality check → contradictions → assumptions
-          </p>
-          <ReasoningTraceView result={result} />
+      {hasResult && (
+        <details className="collapsible">
+          <summary>
+            See our full analysis
+            <span className="summary-sub">extract → research → verify → calculate → benchmark → reason</span>
+          </summary>
+          <div className="collapsible-body">
+            <ReasoningTraceView result={result as ModuleResult} />
+          </div>
+        </details>
+      )}
+
+      <details className="collapsible">
+        <summary>
+          Sources
+          <span className="summary-sub">{evidence.length} row(s) — every figure above traces back to one of these</span>
+        </summary>
+        <div className="collapsible-body">
+          <EvidenceList evidence={evidence} />
         </div>
-      )}
-
-      <div className="panel">
-        <h2>Evidence trail</h2>
-        <p style={{ fontSize: 12, color: "var(--text-dim)", marginTop: -8 }}>
-          Every conclusion above traces back to one of these rows — claim, origin, confidence and source.
-        </p>
-        <EvidenceList evidence={evidence} />
-      </div>
+      </details>
     </div>
   );
 }

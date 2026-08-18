@@ -48,11 +48,11 @@ export default function MarketRecalculateForm({ companyId, onDone }: { companyId
   }
 
   return (
-    <form onSubmit={submit} className="panel">
-      <h2>Independent TAM recalculation</h2>
-      <p style={{ fontSize: 12, color: "var(--text-dim)", marginTop: -8 }}>
-        Human-in-the-loop: the platform will not guess penetration/segment percentages on its own — supply the inputs
-        you're comfortable defending, and they're recorded as explicit assumptions on the resulting evidence row.
+    <form onSubmit={submit}>
+      <p style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 0 }}>
+        We won't guess a penetration or segment percentage on our own — that's exactly the kind of number a model
+        will happily fabricate. Give us the inputs you'd defend to an IC, and we'll compute the estimate and record
+        your assumptions alongside it.
       </p>
       <label>Methodology</label>
       <select value={methodology} onChange={(e) => setMethodology(e.target.value as any)}>

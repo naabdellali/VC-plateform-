@@ -4,7 +4,27 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, Company, TrayTile, RedFlag } from "@/lib/api";
-import { StatusBadge, SeverityBadge } from "@/components/Badges";
+import { StatusBadge } from "@/components/Badges";
+
+const STATUS_COLOR_VAR: Record<string, string> = {
+  complete: "--status-complete",
+  needs_review: "--status-needs_review",
+  insufficient_evidence: "--status-insufficient_evidence",
+  high_risk: "--status-high_risk",
+  pending: "--status-pending",
+};
+
+const SEV_ICON: Record<string, string> = {
+  critical: "●",
+  major: "▲",
+  watch: "◆",
+};
+
+const SEV_LABEL: Record<string, string> = {
+  critical: "Critical",
+  major: "Major",
+  watch: "Watch",
+};
 
 export default function CompanyTrayPage() {
   const params = useParams<{ id: string }>();
@@ -47,7 +67,7 @@ export default function CompanyTrayPage() {
       <div className="tray">
         {tray?.map((tile) => (
           <Link key={tile.module} href={`/company/${companyId}/module/${tile.module}`} style={{ textDecoration: "none", color: "inherit" }}>
-            <div className="tile">
+            <div className="tile" style={{ borderTop: `3px solid var(${STATUS_COLOR_VAR[tile.status] || "--panel-border"})` }}>
               <div className="tile-title">{tile.label}</div>
               <StatusBadge status={tile.status} />
               <div className="tile-headline">{tile.headline || "Not yet analyzed."}</div>
@@ -61,15 +81,21 @@ export default function CompanyTrayPage() {
         <h2>Red flags summary</h2>
         {flags === null && <p style={{ color: "var(--text-dim)" }}>Loading...</p>}
         {flags?.length === 0 && <p style={{ color: "var(--text-dim)" }}>No red flags identified yet.</p>}
-        {flags?.map((f) => (
-          <div key={f.id} className="evidence-row">
-            <div className="claim">
-              <SeverityBadge severity={f.severity} /> <span style={{ marginLeft: 8 }}>{f.explanation}</span>
+        <div className="redflags-grid">
+          {flags?.map((f) => (
+            <div key={f.id} className={`redflag-card sev-${f.severity}`}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span className="redflag-icon" style={{ color: `var(--sev-${f.severity})` }}>{SEV_ICON[f.severity] || "●"}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: `var(--sev-${f.severity})` }}>
+                  {SEV_LABEL[f.severity] || f.severity}
+                </span>
+              </div>
+              <div className="redflag-text">{f.explanation}</div>
+              {f.potential_impact && <div className="redflag-meta"><b>Impact:</b> {f.potential_impact}</div>}
+              {f.resolving_information && <div className="redflag-meta"><b>Resolve by:</b> {f.resolving_information}</div>}
             </div>
-            {f.potential_impact && <div className="meta">Impact: {f.potential_impact}</div>}
-            {f.resolving_information && <div className="meta">Resolve by: {f.resolving_information}</div>}
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
     </div>
   );

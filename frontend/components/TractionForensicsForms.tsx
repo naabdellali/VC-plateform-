@@ -55,9 +55,9 @@ export default function TractionForensicsForms({ companyId, onDone }: { companyI
 
   return (
     <>
-      <form onSubmit={submitSeries} className="panel">
-        <h2>MRR quality / volatility check</h2>
-        <p style={{ fontSize: 12, color: "var(--text-dim)", marginTop: -8 }}>
+      <form onSubmit={submitSeries} style={{ marginBottom: 22 }}>
+        <h3 style={{ margin: "0 0 4px", textTransform: "none", fontSize: 14, color: "var(--text)", letterSpacing: 0 }}>MRR quality / volatility check</h3>
+        <p style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 0 }}>
           Read the monthly MRR figures off the deck's chart (not parsed automatically) and paste them in order.
           "Up-then-down-then-up" patterns often mean one-off services revenue is mixed into a claimed recurring number.
         </p>
@@ -77,9 +77,9 @@ export default function TractionForensicsForms({ companyId, onDone }: { companyI
         )}
       </form>
 
-      <form onSubmit={submitCacLtv} className="panel">
-        <h2>CAC / LTV internal consistency check</h2>
-        <p style={{ fontSize: 12, color: "var(--text-dim)", marginTop: -8 }}>
+      <form onSubmit={submitCacLtv}>
+        <h3 style={{ margin: "0 0 4px", textTransform: "none", fontSize: 14, color: "var(--text)", letterSpacing: 0 }}>CAC / LTV internal consistency check</h3>
+        <p style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 0 }}>
           Reverse-solves the monthly churn implied by the reported LTV given ARPA and gross margin — flags LTV claims
           that are only possible with implausibly low churn.
         </p>

@@ -6,6 +6,8 @@ doesn't mention it."
 """
 from __future__ import annotations
 
+import json
+
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -65,6 +67,41 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
     )
     trace.add("research", {"queries": queries, "sources_found": len(landscape_sources), "search_mode": search.mode}, [landscape_ev.id])
 
+    # --- 2b. structured competitor list, for a real comparison grid in the UI ---
+    competitor_ids = []
+    competitors_struct = []
+    if landscape_sources:
+        comp_result = llm.identify_competitors(landscape_q, landscape_sources)
+        comp_payload = comp_result.parsed or {"competitors": [], "confidence": "unverified"}
+        for c in comp_payload.get("competitors", [])[:8]:
+            idx = c.get("source_index")
+            src = landscape_sources[idx] if isinstance(idx, int) and 0 <= idx < len(landscape_sources) else None
+            name = (c.get("name") or "").strip()
+            if not name:
+                continue
+            competitors_struct.append({
+                "name": name,
+                "description": c.get("description") or "",
+                "domain": c.get("domain"),
+                "source_url": src["url"] if src else None,
+                "source_name": src["title"] if src else None,
+                "in_deck": any(name.lower() in (dn or "").lower() or (dn or "").lower() in name.lower() for dn in deck_named),
+            })
+        if competitors_struct:
+            comp_conf = {"high": Confidence.high, "medium": Confidence.medium, "low": Confidence.low}.get(
+                comp_payload.get("confidence"), Confidence.unverified
+            )
+            comp_ev = add_evidence(
+                db, company_id=company.id, module=MODULE,
+                claim="Independently identified named competitors",
+                value=json.dumps(competitors_struct), value_type="competitor_list_json",
+                origin=EvidenceOrigin.external_source, source_tier=SourceTier.tier2_secondary,
+                confidence=comp_conf,
+                methodology="LLM-extracted from web-search results; a competitor is only listed if a source explicitly names it.",
+            )
+            competitor_ids.append(comp_ev.id)
+    trace.add("verify", {"structured_competitors_found": len(competitors_struct)}, competitor_ids)
+
     # --- 3. collision simulation: incumbent threat (spec section 9) -------
     collision_q = f"Has any large, well-capitalized incumbent already launched, tested, or explicitly abandoned a product similar to a {company.sector or ''} startup's offering? Why did they stop, if they did?"
     q2 = llm.generate_search_queries(collision_q, {"sector": company.sector})
@@ -117,7 +154,16 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         )
 
     status = ModuleStatus.needs_review if (deck_named or landscape_payload.get("answer")) else ModuleStatus.insufficient_evidence
-    headline = f"Deck names {len(deck_named)} competitor(s). Independent research {'found additional signal' if landscape_payload.get('answer') else 'inconclusive'} - see evidence trail."
+    not_in_deck = sum(1 for c in competitors_struct if not c["in_deck"])
+    if competitors_struct:
+        headline = f"We independently identified {len(competitors_struct)} named competitor(s)"
+        headline += f", {not_in_deck} not mentioned in the deck." if not_in_deck else ", matching what the deck discloses."
+    elif landscape_payload.get("answer") and "unable to independently verify" not in landscape_payload["answer"].lower():
+        headline = "Independent research surfaced signal on the competitive landscape - no individually named competitors confirmed yet."
+    elif deck_named:
+        headline = f"Deck names {len(deck_named)} competitor(s); independent research was inconclusive."
+    else:
+        headline = "No competitors named in the deck, and independent research was inconclusive."
 
     upsert_module_result(
         db, company, MODULE, status=status, headline=headline,

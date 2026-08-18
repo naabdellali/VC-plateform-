@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { api, Memo } from "@/lib/api";
+import { api, Company, Memo } from "@/lib/api";
 
 const REC_COLORS: Record<string, string> = {
   invest: "var(--status-complete)",
@@ -17,6 +17,7 @@ export default function MemoPage() {
   const companyId = params.id;
 
   const [memo, setMemo] = useState<Memo | null>(null);
+  const [company, setCompany] = useState<Company | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +25,7 @@ export default function MemoPage() {
   const load = useCallback(() => {
     if (!companyId) return;
     api.getMemo(companyId).then((m) => { setMemo(m); setNotFound(false); }).catch(() => setNotFound(true));
+    api.getCompany(companyId).then(setCompany).catch(() => {});
   }, [companyId]);
 
   useEffect(() => load(), [load]);
@@ -46,12 +48,19 @@ export default function MemoPage() {
     <div className="container">
       <div className="header">
         <div>
-          <Link href={`/company/${companyId}`} style={{ fontSize: 12 }}>← Back to tray</Link>
-          <h1 style={{ marginTop: 6 }}>Investment memo</h1>
+          <Link href={`/company/${companyId}`} className="no-print" style={{ fontSize: 12 }}>← Back to tray</Link>
+          <h1 style={{ marginTop: 6 }}>Investment memo{company?.name ? ` — ${company.name}` : ""}</h1>
         </div>
-        <button className="btn-secondary" onClick={generate} disabled={busy}>
-          {busy ? "Generating..." : memo ? "Regenerate memo" : "Generate memo"}
-        </button>
+        <div className="no-print" style={{ display: "flex", gap: 10 }}>
+          {memo && (
+            <button className="btn-secondary" onClick={() => window.print()}>
+              Download as PDF
+            </button>
+          )}
+          <button className="btn-secondary" onClick={generate} disabled={busy}>
+            {busy ? "Generating..." : memo ? "Regenerate memo" : "Generate memo"}
+          </button>
+        </div>
       </div>
 
       {error && <p style={{ color: "var(--sev-critical)" }}>{error}</p>}
