@@ -153,6 +153,49 @@ class LlmClient:
         return self._call_json(system, user)
 
     # ------------------------------------------------------------------
+    # 2b. Top-down TAM/SAM/SOM estimation - produces an analyst-style,
+    #     footnoted market-sizing writeup instead of a bare number. Every
+    #     TAM/SAM dollar figure must trace to a provided source; only the
+    #     SOM capture-rate range is allowed as a labelled methodology
+    #     convention rather than a citation (mirrors how a human analyst
+    #     actually does top-down sizing when no report covers the exact
+    #     niche - aggregate adjacent markets, apply a sourced geography
+    #     split, apply a conservative capture-rate range).
+    # ------------------------------------------------------------------
+    def estimate_tam_sam_som(self, company_context: dict, sources: list[dict]) -> LlmResult:
+        system = (
+            "You are a VC analyst producing a top-down TAM/SAM/SOM market-sizing writeup, in the style of a "
+            "professional investment memo. Rules: "
+            "1) Every dollar figure you give for TAM and SAM must be traceable to one of the provided sources - "
+            "cite it with a footnote number. Never state a market-size figure that is not grounded in a source. "
+            "2) If no source directly covers the company's exact niche, aggregate 2-3 clearly adjacent/comparable "
+            "markets found in the sources, and say so explicitly in your reasoning. "
+            "3) SAM should apply a geography/segment percentage that itself comes from a source when possible "
+            "(e.g. 'North America is 31% of this market, per source [n]'); if you must estimate it without a "
+            "direct source, say so explicitly and do not attach a footnote to that specific number. "
+            "4) SOM (realistically capturable over 3-5 years) should apply a conservative, clearly-labelled "
+            "capture-rate range (a standard analyst convention, e.g. 1-3% for an early/young category) - label "
+            "this explicitly as a methodology convention, NOT a cited fact, and do not attach a footnote to it. "
+            "5) If the sources are too thin or irrelevant to support any defensible estimate, return "
+            '{"insufficient": true, "reason": "..."} instead of guessing. '
+            "6) Write the reasoning fields as a VC analyst would, in French, in plain prose, with inline footnote "
+            "markers like [1], [2] placed right after the figure they support. "
+            'Return ONLY JSON: {"insufficient": false, "currency": "USD"|"EUR", '
+            '"tam": {"estimate_low": number, "estimate_high": number, "reasoning": "prose with [1][2] markers"}, '
+            '"sam": {"estimate": number, "pct_of_tam": number or null, "reasoning": "prose with markers"}, '
+            '"som": {"estimate_low": number, "estimate_high": number, "capture_rate_low_pct": number, '
+            '"capture_rate_high_pct": number, "reasoning": "prose, methodology convention not a citation"}, '
+            '"footnotes": [{"n": 1, "source_index": 0, "detail": "Source name, key figure quoted, short"}]}'
+        )
+        user = f"Company context: {json.dumps(company_context)}\n\nSources:\n" + json.dumps(sources, indent=2)[:14000]
+        if self.mode == "mock":
+            return LlmResult(
+                mode="mock", text=MOCK_DISCLAIMER,
+                parsed={"insufficient": True, "reason": "No live research/LLM provider configured - mock mode."},
+            )
+        return self._call_json(system, user, max_tokens=3000)
+
+    # ------------------------------------------------------------------
     # 3b. Structured competitor identification - used to render an actual
     #     comparison grid in the UI instead of a wall of prose. Strictly
     #     source-restricted: a competitor only appears here if a source

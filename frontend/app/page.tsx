@@ -20,7 +20,6 @@ export default function HomePage() {
       <div className="header">
         <div>
           <h1>VC Investment Intelligence Platform</h1>
-          <div className="sub">Extract → Research → Verify → Challenge → Benchmark → Reason → Conclude</div>
         </div>
       </div>
 

@@ -10,6 +10,7 @@ import ReasoningTraceView from "@/components/ReasoningTrace";
 import MarketRecalculateForm from "@/components/MarketRecalculateForm";
 import TractionForensicsForms from "@/components/TractionForensicsForms";
 import CompetitorGrid from "@/components/CompetitorGrid";
+import TamSamSomView, { TamSamSom } from "@/components/TamSamSomView";
 
 const MODULE_LABELS: Record<string, string> = {
   market: "Market",
@@ -54,7 +55,21 @@ export default function ModuleDetailPage() {
 
   const hasResult = result && result !== "not_found";
   const isInsufficient = hasResult && (result as ModuleResult).status === "insufficient_evidence";
-  const platformDisplay = hasResult ? formatMoneyMaybe((result as ModuleResult).platform_value) : null;
+
+  const tamSamSom = useMemo<TamSamSom | null>(() => {
+    if (module !== "market" || !hasResult) return null;
+    const raw = (result as ModuleResult).platform_value;
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.tam && parsed.sam && parsed.som) return parsed as TamSamSom;
+    } catch {
+      /* not JSON - fall through to the generic display below */
+    }
+    return null;
+  }, [module, hasResult, result]);
+
+  const platformDisplay = hasResult && !tamSamSom ? formatMoneyMaybe((result as ModuleResult).platform_value) : null;
   const deckDisplay = hasResult ? formatMoneyMaybe((result as ModuleResult).deck_value) : null;
 
   return (
@@ -79,7 +94,9 @@ export default function ModuleDetailPage() {
             <StatusBadge status={(result as ModuleResult).status} />
           </div>
 
-          {module === "competition" && competitors.length > 0 ? (
+          {module === "market" && tamSamSom ? (
+            <TamSamSomView data={tamSamSom} />
+          ) : module === "competition" && competitors.length > 0 ? (
             <>
               <CompetitorGrid competitors={competitors} />
               <p className="hero-note">{(result as ModuleResult).headline}</p>
@@ -98,7 +115,7 @@ export default function ModuleDetailPage() {
             <p className="hero-empty">{(result as ModuleResult).headline}</p>
           )}
 
-          {(deckDisplay || (module === "competition" && (result as ModuleResult).deck_value)) && (
+          {module !== "market" && (deckDisplay || (module === "competition" && (result as ModuleResult).deck_value)) && (
             <div className="hero-secondary">
               <div>
                 <div className="item-label">What the deck says</div>
@@ -165,6 +182,21 @@ export default function ModuleDetailPage() {
           <EvidenceList evidence={evidence} />
         </div>
       </details>
+
+      {module === "market" && hasResult && tamSamSom && (
+        <div className="panel">
+          <h2>Comparison with the deck</h2>
+          {deckDisplay ? (
+            <p style={{ fontSize: 13.5, lineHeight: 1.6 }}>
+              The deck claims <b>{deckDisplay}</b>. {(result as ModuleResult).discrepancy_explanation}
+            </p>
+          ) : (
+            <p style={{ fontSize: 13.5, color: "var(--text-dim)", lineHeight: 1.6 }}>
+              The deck did not provide its own market-size figure — nothing to compare our estimate against.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
