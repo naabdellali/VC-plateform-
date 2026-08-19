@@ -41,6 +41,63 @@ def _strip_code_fences(text: str) -> str:
     return text
 
 
+def _salvage_json_array(text: str) -> list | None:
+    """
+    Best-effort recovery for a JSON array response that got cut off mid-object -
+    e.g. extract_claims on a very dense deck (revenue by quarter, competitors,
+    team, market sizing, traction all in one deck) can produce a long enough
+    claims array that even a generous max_tokens cap sometimes isn't enough,
+    and the response is truncated mid-object by the model's own output limit.
+    A plain json.loads() on that then fails entirely, and previously the
+    caller got `parsed=None` -> treated as "zero claims extracted" - which is
+    exactly the bug reported ("the platform extracted nothing" from a
+    deck with lots of tables/data).
+
+    Instead, walk the text tracking string/brace state and keep every
+    top-level `{...}` object that DOES parse cleanly, dropping only the
+    final, incomplete one. A deck that had 30 extractable claims and got
+    cut off after 27 should yield 27 claims, not 0.
+
+    Only used as a fallback after a normal json.loads() has already failed;
+    returns None (not []) if nothing could be salvaged, so callers can still
+    tell "genuinely empty" apart from "not an array at all".
+    """
+    text = text.strip()
+    if not text.startswith("["):
+        return None
+    objects = []
+    depth = 0
+    start = None
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start is not None:
+                candidate = text[start : i + 1]
+                try:
+                    objects.append(json.loads(candidate))
+                except json.JSONDecodeError:
+                    pass
+                start = None
+    return objects if objects else None
+
+
 class LlmClient:
     def __init__(self):
         self._client = None
@@ -72,7 +129,10 @@ class LlmClient:
         try:
             parsed = json.loads(cleaned)
         except json.JSONDecodeError:
-            parsed = None
+            # Salvage whatever complete top-level objects we can from a response that
+            # got cut off mid-array (see _salvage_json_array) rather than silently
+            # discarding the whole batch - a no-op for any non-array-shaped response.
+            parsed = _salvage_json_array(cleaned)
         return LlmResult(mode="live", text=raw, parsed=parsed)
 
     # ------------------------------------------------------------------
@@ -98,8 +158,11 @@ class LlmClient:
         # market sizing all present) can produce a long claims array - the default
         # 2000-token cap was silently truncating the JSON mid-array on those decks,
         # which read as "the platform extracted nothing" for whatever category
-        # happened to be extracted last. Give it real headroom.
-        return self._call_json(system, deck_text[:60000], max_tokens=4000)
+        # happened to be extracted last. 8000 gives real headroom for a genuinely
+        # dense deck (30-50+ claims); _call_json also salvages whatever complete
+        # objects it can if even that gets cut off, so a truncation never again
+        # silently means zero claims.
+        return self._call_json(system, deck_text[:60000], max_tokens=8000)
 
     def _mock_extract_claims(self, deck_text: str) -> LlmResult:
         # Deterministic, regex-based stand-in so the pipeline is exercisable
