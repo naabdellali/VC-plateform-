@@ -244,12 +244,27 @@ class LlmClient:
             "possible), state its key facts (funding, notable clients) ONLY if sourced, and write one sharp "
             "sentence on what differentiates the target and one sharp sentence on the main competitive risk "
             "- both may be analytical judgment, but label them as such, not as sourced fact. "
+            "Then classify the competitive intensity as a one-word snapshot label a VC would use in a deck "
+            "review: 'blue_ocean' (few/no direct competitors, category still open), 'red_ocean' (many direct "
+            "competitors, intense head-to-head competition), or 'blood_red_ocean' (saturated, commoditized, "
+            "price-competitive). Base this only on the density/intensity you observe in the sources, and give "
+            "one short (1 sentence) justification. "
+            "Finally, grade the startup's moat (defensibility / barrier to entry against competitors and "
+            "incumbents) using ONLY the standard three-tier convention: 'No Moat' (no discernible durable "
+            "advantage), 'Narrow Moat' (some real but erodable advantage - e.g. early traction, a feature "
+            "lead, a niche), or 'Wide Moat' (a durable, hard-to-replicate advantage - e.g. network effects, "
+            "high switching costs, proprietary data/tech, regulatory barrier). Justify the grade in 2-4 "
+            "sentences (40-80 words), citing footnote markers [n] where the reasoning rests on a sourced fact "
+            "(e.g. funding gap vs incumbents, switching-cost evidence); label anything that is pure analyst "
+            "judgment as such rather than attaching a footnote to it. "
             'Return ONLY JSON: {"functions": ["..."], "geographies": ["France / Europe", "États-Unis"], '
             '"matrix": [{"function": "...", "cells": {"France / Europe": "names or Quasi absent", '
             '"États-Unis": "names or Quasi absent"}}], '
             '"closest_comparable": {"name": "...", "description": "1-2 sentences, sourced facts only", '
             '"source_index": 0 or null}, '
             '"differentiator": "1 sharp sentence, analyst judgment", "risk": "1 sharp sentence, analyst judgment", '
+            '"ocean": {"type": "blue_ocean"|"red_ocean"|"blood_red_ocean", "reasoning": "1 sharp sentence"}, '
+            '"moat": {"grade": "No Moat"|"Narrow Moat"|"Wide Moat", "reasoning": "2-4 sentences with [n] markers where sourced"}, '
             '"footnotes": [{"n": 1, "source_index": 0, "detail": "Source name, key figure quoted, short"}]} '
             "Style: terse, declarative, like a real analyst memo - no hedging, no filler, no restating the "
             "question. If the sources are too thin to build any of this, return "

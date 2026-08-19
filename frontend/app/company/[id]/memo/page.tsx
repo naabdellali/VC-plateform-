@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { api, Company, Memo } from "@/lib/api";
 import TamSamSomView from "@/components/TamSamSomView";
 import CompetitiveLandscapeView from "@/components/CompetitiveLandscapeView";
+import MoatView from "@/components/MoatView";
 
 const REC_LABEL: Record<string, string> = {
   invest: "INVEST",
@@ -99,15 +100,17 @@ export default function MemoPage() {
           )}
 
           {memo.sections_json?.map((s, i) => {
-            if (s.kind === "tam_sam_som" || s.kind === "competitive_landscape") {
+            if (s.kind === "tam_sam_som" || s.kind === "competitive_landscape" || s.kind === "moat") {
               sectionNumber += 1;
               return (
                 <div key={i}>
                   <div className="doc-section-title">{sectionNumber}. {s.title}</div>
                   {s.kind === "tam_sam_som" ? (
                     <TamSamSomView data={s.data} variant="document" footnotePrefix={`memo-${i}`} />
-                  ) : (
+                  ) : s.kind === "competitive_landscape" ? (
                     <CompetitiveLandscapeView data={s.data} variant="document" footnotePrefix={`memo-${i}`} />
+                  ) : (
+                    <MoatView data={s.data} variant="document" footnotePrefix={`memo-${i}`} />
                   )}
                 </div>
               );

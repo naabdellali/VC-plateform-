@@ -12,11 +12,14 @@ import TractionForensicsForms from "@/components/TractionForensicsForms";
 import CompetitorGrid from "@/components/CompetitorGrid";
 import TamSamSomView, { TamSamSom } from "@/components/TamSamSomView";
 import CompetitiveLandscapeView, { CompetitiveLandscape } from "@/components/CompetitiveLandscapeView";
+import MoatView, { Moat } from "@/components/MoatView";
 
 const MODULE_LABELS: Record<string, string> = {
   market: "Market Analysis",
-  competition: "Competition & Moat",
-  traction: "Traction & Business Model",
+  competition: "Competitive Landscape",
+  moat: "Moat",
+  traction: "Traction",
+  business_model: "Business Model",
   founders: "Team & Background",
 };
 
@@ -83,7 +86,20 @@ export default function ModuleDetailPage() {
     return null;
   }, [module, hasResult, result]);
 
-  const platformDisplay = hasResult && !tamSamSom && !landscape ? formatMoneyMaybe((result as ModuleResult).platform_value) : null;
+  const moat = useMemo<Moat | null>(() => {
+    if (module !== "moat" || !hasResult) return null;
+    const raw = (result as ModuleResult).platform_value;
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.grade) return parsed as Moat;
+    } catch {
+      /* not JSON */
+    }
+    return null;
+  }, [module, hasResult, result]);
+
+  const platformDisplay = hasResult && !tamSamSom && !landscape && !moat ? formatMoneyMaybe((result as ModuleResult).platform_value) : null;
   const deckDisplay = hasResult ? formatMoneyMaybe((result as ModuleResult).deck_value) : null;
 
   return (
@@ -103,7 +119,11 @@ export default function ModuleDetailPage() {
         <div className="hero">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
             <div className="hero-label">
-              {module === "competition" ? "What we found independently" : "Our independent conclusion"}
+              {module === "competition" || module === "moat"
+                ? "What we found independently"
+                : module === "business_model"
+                ? "As entered on the workspace"
+                : "Our independent conclusion"}
             </div>
             <StatusBadge status={(result as ModuleResult).status} />
           </div>
@@ -112,6 +132,8 @@ export default function ModuleDetailPage() {
             <TamSamSomView data={tamSamSom} />
           ) : module === "competition" && landscape ? (
             <CompetitiveLandscapeView data={landscape} />
+          ) : module === "moat" && moat ? (
+            <MoatView data={moat} />
           ) : module === "competition" && competitors.length > 0 ? (
             <>
               <CompetitorGrid competitors={competitors} />
@@ -149,7 +171,11 @@ export default function ModuleDetailPage() {
           )}
 
           <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 14 }}>
-            {(result as ModuleResult).llm_mode === "mock" ? "Produced in mock mode (no live LLM configured)." : "Produced in live mode."}
+            {module === "business_model"
+              ? "Champ du formulaire de workspace — non recherché indépendamment."
+              : (result as ModuleResult).llm_mode === "mock"
+              ? "Produced in mock mode (no live LLM configured)."
+              : "Produced in live mode."}
           </div>
         </div>
       )}

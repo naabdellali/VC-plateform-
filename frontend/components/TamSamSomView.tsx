@@ -1,3 +1,5 @@
+import FootnoteList, { withFootnoteLinks, Footnote } from "@/components/Footnotes";
+
 type Tier = {
   estimate?: number;
   estimate_low?: number;
@@ -7,8 +9,6 @@ type Tier = {
   capture_rate_high_pct?: number;
   reasoning?: string;
 };
-
-type Footnote = { n: number; detail: string; source_url: string | null; source_name: string | null };
 
 export type TamSamSom = {
   currency: string;
@@ -37,22 +37,7 @@ function rangeStr(tier: Tier, symbol: string): string {
 }
 
 function ReasoningWithFootnotes({ text, prefix }: { text: string; prefix: string }) {
-  const parts = text.split(/(\[\d+\])/g);
-  return (
-    <p style={{ margin: 0 }}>
-      {parts.map((part, i) => {
-        const m = part.match(/^\[(\d+)\]$/);
-        if (m) {
-          return (
-            <a key={i} href={`#fn-${prefix}-${m[1]}`} style={{ fontSize: 11, verticalAlign: "super", fontWeight: 700 }}>
-              [{m[1]}]
-            </a>
-          );
-        }
-        return <span key={i}>{part}</span>;
-      })}
-    </p>
-  );
+  return <p style={{ margin: 0 }}>{withFootnoteLinks(text, prefix)}</p>;
 }
 
 const TIER_COLOR: Record<string, string> = {
@@ -102,21 +87,7 @@ export default function TamSamSomView({ data, variant = "card", footnotePrefix =
           </div>
         ))}
 
-        {data.footnotes.length > 0 && (
-          <div className="doc-footnotes">
-            {data.footnotes.map((fn) => (
-              <div key={fn.n} id={`fn-${footnotePrefix}-${fn.n}`}>
-                <sup>{fn.n}</sup>{fn.detail}
-                {fn.source_url && (
-                  <>
-                    {" — "}
-                    <a href={fn.source_url} target="_blank" rel="noreferrer">{fn.source_name || fn.source_url}</a>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+        <FootnoteList footnotes={data.footnotes} prefix={footnotePrefix} />
       </div>
     );
   }
@@ -162,21 +133,7 @@ export default function TamSamSomView({ data, variant = "card", footnotePrefix =
             </div>
           ))}
 
-          {data.footnotes.length > 0 && (
-            <div style={{ borderTop: "1px dashed var(--panel-border)", paddingTop: 10, marginTop: 4 }}>
-              {data.footnotes.map((fn) => (
-                <div key={fn.n} id={`fn-${footnotePrefix}-${fn.n}`} style={{ fontSize: 11.5, color: "var(--text-dim)", marginBottom: 4 }}>
-                  <sup style={{ fontWeight: 700 }}>{fn.n}</sup> {fn.detail}
-                  {fn.source_url && (
-                    <>
-                      {" — "}
-                      <a href={fn.source_url} target="_blank" rel="noreferrer">{fn.source_name || fn.source_url}</a>
-                    </>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+          <FootnoteList footnotes={data.footnotes} prefix={footnotePrefix} />
         </div>
       </details>
     </div>

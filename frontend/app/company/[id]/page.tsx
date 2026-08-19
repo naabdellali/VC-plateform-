@@ -26,6 +26,8 @@ const SEV_LABEL: Record<string, string> = {
   watch: "Watch",
 };
 
+const SEV_ORDER: Record<string, number> = { critical: 0, major: 1, watch: 2 };
+
 export default function CompanyTrayPage() {
   const params = useParams<{ id: string }>();
   const companyId = params.id;
@@ -82,7 +84,7 @@ export default function CompanyTrayPage() {
         {flags === null && <p style={{ color: "var(--text-dim)" }}>Loading...</p>}
         {flags?.length === 0 && <p style={{ color: "var(--text-dim)" }}>No red flags identified yet.</p>}
         <div className="redflags-grid">
-          {flags?.map((f) => (
+          {[...(flags || [])].sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9)).map((f) => (
             <div key={f.id} className={`redflag-card sev-${f.severity}`}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span className="redflag-icon" style={{ color: `var(--sev-${f.severity})` }}>{SEV_ICON[f.severity] || "●"}</span>

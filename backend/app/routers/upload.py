@@ -8,7 +8,7 @@ from app.schemas import AnalyzeResponse, CompanyOut, DeckOut
 from app.services.deck_parser import parse_deck
 from app.services.llm_client import get_llm_client
 from app.rules.saas_rules import evaluate_trigger_rules
-from app.services.reasoning import market_module, traction_module, founders_module, competition_module
+from app.services.reasoning import market_module, traction_module, founders_module, competition_module, business_model_module
 
 router = APIRouter(prefix="/companies", tags=["upload"])
 
@@ -74,7 +74,7 @@ async def upload_deck(
     # Rule engine (spec section 38): which modules does this deck's content
     # obligate us to run, beyond the default MVP set.
     fired_rules = evaluate_trigger_rules(extracted_claims)
-    modules_triggered = {"market", "competition", "traction", "founders"}
+    modules_triggered = {"market", "competition", "traction", "founders", "business_model"}
     for rule in fired_rules:
         modules_triggered.update(rule["triggers"])
 
@@ -86,6 +86,8 @@ async def upload_deck(
         traction_module.run_auto(db, company, deck)
     if "founders" in modules_triggered:
         founders_module.run_auto(db, company, deck)
+    if "business_model" in modules_triggered:
+        business_model_module.run_auto(db, company, deck)
 
     db.commit()
     db.refresh(company)

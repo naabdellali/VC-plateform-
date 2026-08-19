@@ -106,8 +106,8 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
 
     status = ModuleStatus.needs_review if traction_claims else ModuleStatus.insufficient_evidence
     headline = (
-        f"Deck claims {deck_value:,.0f} EUR MRR/ARR. Run /mrr-series and /cac-ltv-check for forensic checks."
-        if deck_value else "No traction metric found in deck."
+        f"Traction : {deck_value:,.0f} EUR MRR/ARR déclaré (non vérifié)."
+        if deck_value else "Traction : en attente de données."
     )
     upsert_module_result(
         db, company, MODULE, status=status, headline=headline,
@@ -146,9 +146,20 @@ def submit_mrr_series(db: Session, company: Company, monthly_values_eur: list[fl
         trace.steps = result.reasoning_json.get("steps", [])
     trace.add("calculate", report.as_evidence_payload(), [calc_ev.id])
 
+    # Transparent, single-glance trend signal for the tray tile - the full CV/volatility
+    # detail still lives in discrepancy_explanation and the reasoning trace below it.
+    first, last = monthly_values_eur[0], monthly_values_eur[-1]
+    if last > first * 1.05:
+        trend = "↑ Traction en hausse"
+    elif last < first * 0.95:
+        trend = "↓ Traction en baisse"
+    else:
+        trend = "→ Traction stable"
+    headline = f"{trend} (CV={report.coefficient_of_variation:.2f})."
+
     upsert_module_result(
         db, company, MODULE, status=ModuleStatus.complete,
-        headline=f"MRR volatility check: CV={report.coefficient_of_variation:.2f}, {report.declining_months}/{report.total_months - 1} declining months.",
+        headline=headline,
         deck_value=result.deck_value if result else None,
         platform_value=str(round(monthly_values_eur[-1], 2)),
         discrepancy_explanation=report.flags[0], trace=trace, llm_mode=get_llm_client().mode,

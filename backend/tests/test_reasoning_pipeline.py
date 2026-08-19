@@ -10,7 +10,7 @@ core promise:
    say "unable to independently verify" - never a fabricated fact.
 """
 from app.models import ModuleResult, Evidence, Memo, Confidence
-from app.services.reasoning import market_module, traction_module, founders_module, competition_module, memo_module
+from app.services.reasoning import market_module, traction_module, founders_module, competition_module, business_model_module, memo_module
 
 
 def test_market_module_auto_pass_runs_in_mock_mode(db_session, sample_company, sample_deck):
@@ -108,12 +108,27 @@ def test_competition_module_runs_in_mock_mode(db_session, sample_company, sample
     result = db_session.query(ModuleResult).filter_by(company_id=sample_company.id, module="competition").one()
     assert "LegacyCorp" in (result.deck_value or "")
 
+    # The moat grade is split into its own tray tile/module row - it should always be
+    # populated (even if just "insufficient_evidence" in mock mode), never silently missing.
+    moat_result = db_session.query(ModuleResult).filter_by(company_id=sample_company.id, module="moat").one()
+    assert moat_result.status.value in {"needs_review", "insufficient_evidence"}
+
+
+def test_business_model_module_is_a_transparent_passthrough(db_session, sample_company, sample_deck):
+    business_model_module.run_auto(db_session, sample_company, sample_deck)
+    db_session.commit()
+
+    result = db_session.query(ModuleResult).filter_by(company_id=sample_company.id, module="business_model").one()
+    assert result.status.value == "complete"
+    assert "SaaS" in (result.headline or "")  # sample_company fixture is BusinessModel.saas
+
 
 def test_memo_generation_assembles_all_modules_and_recommends_conservatively(db_session, sample_company, sample_deck):
     market_module.run_auto(db_session, sample_company, sample_deck)
     traction_module.run_auto(db_session, sample_company, sample_deck)
     founders_module.run_auto(db_session, sample_company, sample_deck)
     competition_module.run_auto(db_session, sample_company, sample_deck)
+    business_model_module.run_auto(db_session, sample_company, sample_deck)
     db_session.flush()
 
     memo = memo_module.generate_memo(db_session, sample_company)
@@ -125,7 +140,7 @@ def test_memo_generation_assembles_all_modules_and_recommends_conservatively(db_
     # "don't optimize for positive conclusions."
     assert memo.recommendation.value != "invest"
     titles = [s["title"] for s in memo.sections_json]
-    assert "Taille de marché (TAM / SAM / SOM)" in titles and "Traction & Business Model" in titles and "Red Flags" in titles and "Recommendation" in titles
+    assert "Taille de marché (TAM / SAM / SOM)" in titles and "Traction" in titles and "Red Flags" in titles and "Recommendation" in titles
 
     saved = db_session.query(Memo).filter_by(company_id=sample_company.id).one()
     assert saved.id == memo.id

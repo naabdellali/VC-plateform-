@@ -20,6 +20,13 @@ from app.services.reasoning.base import ReasoningTrace, upsert_module_result
 from app.services.reasoning.red_flags import add_red_flag
 
 MODULE = "competition"
+MOAT_MODULE = "moat"
+
+OCEAN_LABEL = {
+    "blue_ocean": "Blue Ocean",
+    "red_ocean": "Red Ocean",
+    "blood_red_ocean": "Blood Red Ocean",
+}
 
 
 def run_auto(db: Session, company: Company, deck: Deck) -> None:
@@ -51,6 +58,11 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             headline="We can't map the competitive landscape yet - the company's sector/industry isn't known.",
             deck_value=", ".join(list(deck_named)[:5]) if deck_named else None,
             platform_value=None, discrepancy_explanation=None, trace=trace, llm_mode=llm.mode,
+        )
+        upsert_module_result(
+            db, company, MOAT_MODULE, status=ModuleStatus.insufficient_evidence,
+            headline="Défendabilité non évaluée - secteur inconnu.",
+            deck_value=None, platform_value=None, discrepancy_explanation=None, trace=trace, llm_mode=llm.mode,
         )
         return
     landscape_q = f"Who are the direct and indirect competitors in {company.sector}, including incumbents and adjacent solutions, by function and by region (France/Europe vs United States)?"
@@ -114,8 +126,13 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
     trace.add("verify", {"structured_competitors_found": len(competitors_struct)}, competitor_ids)
 
     # --- 2c. function x geography landscape matrix - the analyst-memo format ------------------
+    # Also carries the "ocean" snapshot (blue/red/blood-red - competitive intensity at a glance)
+    # and the "moat" grade (No/Narrow/Wide) - split out into their own tray tile + memo section
+    # below, since they're a distinct judgment from the raw landscape mapping.
     landscape_struct = None
+    moat_struct = None
     platform_value = None
+    moat_platform_value = None
     if landscape_sources:
         matrix_result = llm.build_competitive_landscape({"sector": company.sector, "hq_country": company.hq_country}, landscape_sources)
         matrix_payload = matrix_result.parsed or {"insufficient": True}
@@ -131,6 +148,12 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             comparable = matrix_payload.get("closest_comparable") or {}
             comp_idx = comparable.get("source_index")
             comp_src = landscape_sources[comp_idx] if isinstance(comp_idx, int) and 0 <= comp_idx < len(landscape_sources) else None
+            ocean_payload = matrix_payload.get("ocean") or {}
+            ocean_type = ocean_payload.get("type") if ocean_payload.get("type") in OCEAN_LABEL else None
+            ocean_struct = (
+                {"type": ocean_type, "label": OCEAN_LABEL[ocean_type], "reasoning": ocean_payload.get("reasoning")}
+                if ocean_type else None
+            )
             landscape_struct = {
                 "functions": matrix_payload.get("functions") or [],
                 "geographies": matrix_payload.get("geographies") or ["France / Europe", "États-Unis"],
@@ -141,6 +164,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
                 } if comparable.get("name") else None,
                 "differentiator": matrix_payload.get("differentiator"),
                 "risk": matrix_payload.get("risk"),
+                "ocean": ocean_struct,
                 "footnotes": footnotes,
             }
             landscape_ev2 = add_evidence(
@@ -154,6 +178,25 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             )
             platform_value = json.dumps(landscape_struct)
             trace.add("calculate", landscape_struct, [landscape_ev2.id])
+
+            moat_payload = matrix_payload.get("moat") or {}
+            if moat_payload.get("grade"):
+                moat_struct = {
+                    "grade": moat_payload.get("grade"),
+                    "reasoning": moat_payload.get("reasoning") or "",
+                    "footnotes": footnotes,
+                }
+                moat_ev = add_evidence(
+                    db, company_id=company.id, module=MOAT_MODULE,
+                    claim="Independent moat / defensibility grade",
+                    value=json.dumps(moat_struct), value_type="moat_json",
+                    origin=EvidenceOrigin.platform_inference,
+                    source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
+                    confidence=Confidence.medium,
+                    methodology="LLM-graded on the standard No Moat / Narrow Moat / Wide Moat convention, from the same sourced competitive research.",
+                )
+                moat_platform_value = json.dumps(moat_struct)
+                trace.add("calculate", moat_struct, [moat_ev.id])
 
     # --- 3. collision simulation: incumbent threat (spec section 9) -------
     collision_q = f"Has any large, well-capitalized incumbent already launched, tested, or explicitly abandoned a product similar to a {company.sector or ''} startup's offering? Why did they stop, if they did?"
@@ -208,7 +251,15 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
 
     status = ModuleStatus.needs_review if (landscape_struct or competitors_struct or deck_named) else ModuleStatus.insufficient_evidence
     not_in_deck = sum(1 for c in competitors_struct if not c["in_deck"])
-    if landscape_struct and landscape_struct.get("closest_comparable"):
+    if landscape_struct and landscape_struct.get("ocean"):
+        headline = f"{landscape_struct['ocean']['label']}"
+        if landscape_struct.get("closest_comparable"):
+            headline += f" — comparable le plus proche : {landscape_struct['closest_comparable']['name']}."
+        elif not_in_deck:
+            headline += f" — {not_in_deck} acteur(s) non mentionné(s) dans le deck."
+        else:
+            headline += "."
+    elif landscape_struct and landscape_struct.get("closest_comparable"):
         headline = f"Comparable le plus proche : {landscape_struct['closest_comparable']['name']}."
         if not_in_deck:
             headline += f" {not_in_deck} acteur(s) non mentionné(s) dans le deck."
@@ -224,5 +275,13 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         db, company, MODULE, status=status, headline=headline,
         deck_value=", ".join(list(deck_named)[:5]) if deck_named else None,
         platform_value=platform_value, discrepancy_explanation=None,
+        trace=trace, llm_mode=llm.mode,
+    )
+
+    moat_status = ModuleStatus.needs_review if moat_struct else ModuleStatus.insufficient_evidence
+    moat_headline = moat_struct["grade"] if moat_struct else "Pas assez de sources pour évaluer la défendabilité (moat)."
+    upsert_module_result(
+        db, company, MOAT_MODULE, status=moat_status, headline=moat_headline,
+        deck_value=None, platform_value=moat_platform_value, discrepancy_explanation=None,
         trace=trace, llm_mode=llm.mode,
     )

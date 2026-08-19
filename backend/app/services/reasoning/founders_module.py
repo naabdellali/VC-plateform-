@@ -151,7 +151,16 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
 
     status = ModuleStatus.needs_review if team_claims or record.found else ModuleStatus.insufficient_evidence
     n_contradicted = sum(1 for c in classifications if c["classification"] == "contradicted")
-    headline = f"{len(record.dirigeants) if record.found else 0} officer(s) on record via Pappers.fr. {n_contradicted} claim(s) contradicted by public sources." if record.found or classifications else "Insufficient data to run founder verification."
+    # Transparent, single-glance signal for the tray tile - the officer list and per-claim
+    # verification detail still live in the reasoning trace below it.
+    if record.found or classifications:
+        headline = (
+            f"⚠ {n_contradicted} claim(s) contredite(s) par des sources publiques."
+            if n_contradicted
+            else f"✓ {len(record.dirigeants) if record.found else 0} officer(s) vérifié(s) via Pappers.fr."
+        )
+    else:
+        headline = "Team : en attente de données."
 
     upsert_module_result(
         db, company, MODULE, status=status, headline=headline,

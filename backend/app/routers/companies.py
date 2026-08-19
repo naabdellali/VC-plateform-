@@ -11,8 +11,10 @@ router = APIRouter(prefix="/companies", tags=["companies"])
 
 TRAY_MODULES = [
     ("market", "Market Analysis"),
-    ("competition", "Competition & Moat"),
-    ("traction", "Traction & Business Model"),
+    ("competition", "Competitive Landscape"),
+    ("moat", "Moat"),
+    ("traction", "Traction"),
+    ("business_model", "Business Model"),
     ("founders", "Team & Background"),
 ]
 

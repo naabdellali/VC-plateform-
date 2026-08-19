@@ -22,11 +22,12 @@ from sqlalchemy.orm import Session
 from app.models import Company, ModuleResult, RedFlag, RedFlagSeverity, Memo, Recommendation
 from app.services.llm_client import get_llm_client
 
-MODULES_IN_MEMO_ORDER = ["market", "competition", "traction", "founders"]
+MODULES_IN_MEMO_ORDER = ["market", "competition", "moat", "traction", "founders"]
 MODULE_LABELS = {
     "market": "Taille de marché (TAM / SAM / SOM)",
     "competition": "Paysage concurrentiel",
-    "traction": "Traction & Business Model",
+    "moat": "Moat (barrière à l'entrée)",
+    "traction": "Traction",
     "founders": "Team & Background",
 }
 
@@ -93,9 +94,16 @@ def generate_memo(db: Session, company: Company) -> Memo:
                     structured = parsed
             except (ValueError, TypeError):
                 pass
+        elif module_key == "moat" and mr.platform_value:
+            try:
+                parsed = json.loads(mr.platform_value)
+                if isinstance(parsed, dict) and parsed.get("grade"):
+                    structured = parsed
+            except (ValueError, TypeError):
+                pass
 
         if structured:
-            kind = "tam_sam_som" if module_key == "market" else "competitive_landscape"
+            kind = {"market": "tam_sam_som", "competition": "competitive_landscape", "moat": "moat"}[module_key]
             sections.append({"title": MODULE_LABELS[module_key], "kind": kind, "data": structured, "body": "", "evidence_ids": mr.evidence_ids_json or []})
             continue
 

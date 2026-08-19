@@ -1,4 +1,17 @@
-type Footnote = { n: number; detail: string; source_url: string | null; source_name: string | null };
+import FootnoteList, { withFootnoteLinks, Footnote } from "@/components/Footnotes";
+
+const OCEAN_LABEL: Record<string, string> = {
+  blue_ocean: "Blue Ocean",
+  red_ocean: "Red Ocean",
+  blood_red_ocean: "Blood Red Ocean",
+};
+const OCEAN_ICON: Record<string, string> = {
+  blue_ocean: "🔵",
+  red_ocean: "🔴",
+  blood_red_ocean: "🩸",
+};
+
+export type Ocean = { type: string; label: string; reasoning: string | null };
 
 export type CompetitiveLandscape = {
   functions: string[];
@@ -7,23 +20,11 @@ export type CompetitiveLandscape = {
   closest_comparable: { name: string; description: string; source_url: string | null; source_name: string | null } | null;
   differentiator: string | null;
   risk: string | null;
+  ocean: Ocean | null;
   footnotes: Footnote[];
 };
 
-function withFootnotes(text: string, prefix: string) {
-  const parts = text.split(/(\[\d+\])/g);
-  return parts.map((part, i) => {
-    const m = part.match(/^\[(\d+)\]$/);
-    if (m) {
-      return (
-        <a key={i} href={`#fn-${prefix}-${m[1]}`} style={{ fontSize: 11, verticalAlign: "super", fontWeight: 700 }}>
-          [{m[1]}]
-        </a>
-      );
-    }
-    return <span key={i}>{part}</span>;
-  });
-}
+const withFootnotes = withFootnoteLinks;
 
 export default function CompetitiveLandscapeView({
   data,
@@ -34,6 +35,15 @@ export default function CompetitiveLandscapeView({
   variant?: "card" | "document";
   footnotePrefix?: string;
 }) {
+  const oceanBadge = data.ocean && (
+    <div style={{ marginBottom: 14, display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+      <span className={`ocean-badge ocean-${data.ocean.type}`}>
+        {OCEAN_ICON[data.ocean.type] || "●"} {data.ocean.label || OCEAN_LABEL[data.ocean.type]}
+      </span>
+      {data.ocean.reasoning && <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>{data.ocean.reasoning}</span>}
+    </div>
+  );
+
   const table = (
     <table className={variant === "document" ? "doc-table" : "doc-table doc-table-card"}>
       <thead>
@@ -86,29 +96,17 @@ export default function CompetitiveLandscapeView({
   if (variant === "document") {
     return (
       <div className="doc-section">
+        {oceanBadge}
         {table}
         {narrative}
-        {data.footnotes.length > 0 && (
-          <div className="doc-footnotes">
-            {data.footnotes.map((fn) => (
-              <div key={fn.n} id={`fn-${footnotePrefix}-${fn.n}`}>
-                <sup>{fn.n}</sup>{fn.detail}
-                {fn.source_url && (
-                  <>
-                    {" — "}
-                    <a href={fn.source_url} target="_blank" rel="noreferrer">{fn.source_name || fn.source_url}</a>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+        <FootnoteList footnotes={data.footnotes} prefix={footnotePrefix} />
       </div>
     );
   }
 
   return (
     <div>
+      {oceanBadge}
       {table}
       {narrative}
       {data.footnotes.length > 0 && (
@@ -118,17 +116,7 @@ export default function CompetitiveLandscapeView({
             <span className="summary-sub">{data.footnotes.length} footnote(s)</span>
           </summary>
           <div className="collapsible-body">
-            {data.footnotes.map((fn) => (
-              <div key={fn.n} id={`fn-${footnotePrefix}-${fn.n}`} style={{ fontSize: 11.5, color: "var(--text-dim)", marginBottom: 4 }}>
-                <sup style={{ fontWeight: 700 }}>{fn.n}</sup> {fn.detail}
-                {fn.source_url && (
-                  <>
-                    {" — "}
-                    <a href={fn.source_url} target="_blank" rel="noreferrer">{fn.source_name || fn.source_url}</a>
-                  </>
-                )}
-              </div>
-            ))}
+            <FootnoteList footnotes={data.footnotes} prefix={footnotePrefix} />
           </div>
         </details>
       )}

@@ -165,18 +165,61 @@ details.collapsible .collapsible-body { padding: 4px 20px 18px; }
 .competitor-tag.known { background: #eef0f5; color: var(--text-dim); }
 
 /* --- Red flag cards -------------------------------------------------------- */
-.redflags-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; margin-top: 4px; }
+/* Sized/shaped by severity so critical items visually dominate instead of a
+   uniform grid of identical bubbles - dense packing lets smaller "watch"
+   cards fill in around the bigger "critical" ones rather than wasting space. */
+.redflags-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin-top: 4px; grid-auto-flow: dense; }
 .redflag-card {
-  border-radius: 14px; padding: 16px 18px; background: #fbfcfe; border: 1px solid var(--panel-border);
-  border-left-width: 5px; display: flex; flex-direction: column; gap: 8px; min-height: 168px;
+  padding: 16px 18px; background: #fbfcfe; border: 1px solid var(--panel-border);
+  border-left-width: 5px; display: flex; flex-direction: column; gap: 8px;
 }
-.redflag-card.sev-critical { border-left-color: var(--sev-critical); }
-.redflag-card.sev-major { border-left-color: var(--sev-major); }
-.redflag-card.sev-watch { border-left-color: var(--sev-watch); }
+.redflag-card.sev-critical {
+  border-left-color: var(--sev-critical); border-radius: 22px; min-height: 180px;
+  padding: 22px 26px; grid-column: span 2; box-shadow: var(--shadow-md);
+}
+.redflag-card.sev-critical .redflag-text { font-size: 14.5px; }
+.redflag-card.sev-major { border-left-color: var(--sev-major); border-radius: 14px; min-height: 148px; }
+.redflag-card.sev-watch {
+  border-left-color: var(--sev-watch); border-radius: 10px; min-height: 92px; padding: 12px 15px; gap: 5px;
+}
+.redflag-card.sev-watch .redflag-text { font-size: 12px; }
 .redflag-card .redflag-icon { font-size: 16px; }
 .redflag-card .redflag-text { font-size: 13px; line-height: 1.55; flex-grow: 1; }
 .redflag-card .redflag-meta { font-size: 11.5px; color: var(--text-dim); line-height: 1.5; }
 .redflag-card .redflag-meta b { color: var(--text); font-weight: 600; }
+
+/* --- Footnotes as scannable pop-up chips (not a wall of text) ------------- */
+.footnote-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.footnote-item {
+  display: flex; align-items: flex-start; gap: 9px;
+  border: 1px solid var(--panel-border); border-radius: 10px;
+  background: #fbfcfe; padding: 8px 12px; font-size: 11.5px; color: var(--text-dim);
+  line-height: 1.5; box-shadow: var(--shadow-sm);
+}
+.footnote-item .footnote-badge {
+  flex-shrink: 0; width: 18px; height: 18px; border-radius: 999px; margin-top: 1px;
+  background: var(--accent-dim); color: var(--accent-strong); font-weight: 800; font-size: 10px;
+  display: flex; align-items: center; justify-content: center;
+}
+.footnote-item a { font-weight: 600; }
+
+/* --- Moat grade badge ------------------------------------------------------ */
+.moat-badge {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 16px; border-radius: 999px;
+  font-size: 15px; font-weight: 800; letter-spacing: -0.01em;
+}
+.moat-badge.grade-no { background: color-mix(in srgb, var(--sev-critical) 14%, white); color: var(--sev-critical); }
+.moat-badge.grade-narrow { background: color-mix(in srgb, var(--conf-medium) 14%, white); color: var(--conf-medium); }
+.moat-badge.grade-wide { background: color-mix(in srgb, var(--status-complete) 14%, white); color: var(--status-complete); }
+
+/* --- Ocean snapshot badge (Competitive Landscape) -------------------------- */
+.ocean-badge {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 16px; border-radius: 999px;
+  font-size: 15px; font-weight: 800; letter-spacing: -0.01em;
+}
+.ocean-badge.ocean-blue_ocean { background: color-mix(in srgb, #3b6fc4 14%, white); color: #3b6fc4; }
+.ocean-badge.ocean-red_ocean { background: color-mix(in srgb, var(--sev-major) 14%, white); color: var(--sev-major); }
+.ocean-badge.ocean-blood_red_ocean { background: color-mix(in srgb, var(--sev-critical) 14%, white); color: var(--sev-critical); }
 
 .btn {
   background: var(--accent); color: #ffffff; border: none; border-radius: 9px;
@@ -240,4 +283,5 @@ label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 
   .no-print { display: none !important; }
   body { background: white; }
   .panel, .hero { box-shadow: none; border: 1px solid #ddd; }
+  .footnote-item { box-shadow: none; }
 }
