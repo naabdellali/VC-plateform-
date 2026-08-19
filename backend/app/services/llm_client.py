@@ -98,6 +98,174 @@ def _salvage_json_array(text: str) -> list | None:
     return objects if objects else None
 
 
+# ----------------------------------------------------------------------
+# Mock-mode fallbacks for the Phase 1 extraction passes - deterministic,
+# regex/keyword-based, clearly inferior to the real LLM passes (that's the
+# point of labelling them mock), but they exist so the canonical deal
+# representation is still meaningfully populated - not just empty - when
+# no ANTHROPIC_API_KEY is configured. Mirrors the spirit of
+# LlmClient._mock_extract_claims for the older extraction pipeline.
+# ----------------------------------------------------------------------
+
+_NUMBER_KEYWORD_CATEGORIES = [
+    # (regex over the number's context, semantic_category) - first match wins.
+    (re.compile(r"\bmrr\b", re.IGNORECASE), "mrr"),
+    (re.compile(r"\barr\b", re.IGNORECASE), "arr"),
+    (re.compile(r"\bgmv\b", re.IGNORECASE), "gmv"),
+    (re.compile(r"\btam\b", re.IGNORECASE), "market_size_tam"),
+    (re.compile(r"\bsam\b", re.IGNORECASE), "market_size_sam"),
+    (re.compile(r"\bsom\b", re.IGNORECASE), "market_size_som"),
+    (re.compile(r"\bcac\b", re.IGNORECASE), "cac"),
+    (re.compile(r"\bltv\b", re.IGNORECASE), "ltv"),
+    (re.compile(r"\bacv\b", re.IGNORECASE), "acv"),
+    (re.compile(r"churn", re.IGNORECASE), "churn"),
+    (re.compile(r"r[ée]tention|retention", re.IGNORECASE), "retention"),
+    (re.compile(r"marge|margin", re.IGNORECASE), "gross_margin"),
+    (re.compile(r"\bcogs\b", re.IGNORECASE), "cogs"),
+    (re.compile(r"\bburn\b", re.IGNORECASE), "burn"),
+    (re.compile(r"runway", re.IGNORECASE), "runway"),
+    (re.compile(r"pipeline", re.IGNORECASE), "pipeline"),
+    (re.compile(r"conversion", re.IGNORECASE), "conversion"),
+    (re.compile(r"cycle de vente|sales cycle", re.IGNORECASE), "sales_cycle"),
+    (re.compile(r"utilisateurs?\b|\busers?\b", re.IGNORECASE), "users"),
+    (re.compile(r"clients?\b|customers?\b", re.IGNORECASE), "customers"),
+    (re.compile(r"lev[ée]e|raised|funding|s[ée]rie [a-z]\b|series [a-z]\b|\bseed\b", re.IGNORECASE), "funding_amount"),
+    (re.compile(r"valorisation|valuation", re.IGNORECASE), "valuation"),
+    (re.compile(r"croissance|growth", re.IGNORECASE), "growth_rate"),
+    (re.compile(r"employ[ée]s?|salari[ée]s?|headcount", re.IGNORECASE), "headcount"),
+    (re.compile(r"engagement", re.IGNORECASE), "engagement"),
+    (re.compile(r"utilisation|utilization", re.IGNORECASE), "utilization"),
+    (re.compile(r"commandes?|orders?", re.IGNORECASE), "order_volume"),
+    (re.compile(r"unit[ée]s? vendues?|units sold", re.IGNORECASE), "units_sold"),
+    (re.compile(r"revenue|revenu|chiffre d'affaires|\bca\b", re.IGNORECASE), "revenue"),
+]
+
+
+def _mock_classify_numbers(numbers: list[dict]) -> list[dict]:
+    results = []
+    for n in numbers:
+        idx = n.get("index")
+        context = n.get("context") or ""
+        unit = (n.get("unit") or "").lower()
+        category = "unclassified"
+        if unit in ("clients", "customers"):
+            category = "customers"
+        elif unit == "users" or unit == "utilisateurs":
+            category = "users"
+        else:
+            for pattern, cat in _NUMBER_KEYWORD_CATEGORIES:
+                if pattern.search(context):
+                    category = cat
+                    break
+        results.append({
+            "index": idx,
+            "semantic_category": category,
+            "semantic_confidence": "medium" if category != "unclassified" else "low",
+            "candidate_categories": [],
+        })
+    return results
+
+
+def _mock_line_scan(deck_text: str, patterns: list[tuple]) -> list[dict]:
+    """Shared regex-line-scan helper: for each line of deck_text, test each
+    (regex, claim_type, kind) tuple and emit a hit. Deliberately per-line
+    (not per-sentence/paragraph) to mirror the deck's own slide-by-slide
+    structure and keep `context` short and genuinely relevant."""
+    slide = None
+    slide_re = re.compile(r"^--- Slide (\d+):")
+    out = []
+    for line in deck_text.splitlines():
+        m = slide_re.match(line)
+        if m:
+            slide = m.group(1)
+            continue
+        line_stripped = line.strip()
+        if not line_stripped:
+            continue
+        for pattern, claim_type, kind in patterns:
+            if pattern.search(line_stripped):
+                out.append({
+                    "claim_type": claim_type, "kind": kind,
+                    "text": line_stripped[:300], "context": line_stripped[:300], "slide_reference": slide,
+                })
+                break
+    return out
+
+
+_STRUCTURED_FIELD_PATTERNS = [
+    (re.compile(r"\b(CEO|CTO|CFO|COO|CO-?FOUNDER|founder|fondateur|fondatrice)\b", re.IGNORECASE), "team_background", "fact"),
+    (re.compile(r"\bSAS\b|\bSARL\b|\bSIREN\b|\bSIRET\b|si[èe]ge social|headquartered|headquarters", re.IGNORECASE), "company_identity", "fact"),
+    (re.compile(r"lev[ée]e de fonds|raised \S|\bseed\b|\bseries [a-z]\b|\bs[ée]rie [a-z]\b|investisseurs?|investors?", re.IGNORECASE), "funding_history", "fact"),
+    (re.compile(r"tam\b|sam\b|som\b|taille du march[ée]|market size|d[ée]finition du march[ée]", re.IGNORECASE), "market_definition", "fact"),
+    (re.compile(r"€\s?\d|\$\s?\d|/mois|/month|par mois|per month|pricing|tarif", re.IGNORECASE), "pricing", "fact"),
+    (re.compile(r"api|int[ée]gration|architecture|stack technique|technology stack", re.IGNORECASE), "product_architecture", "fact"),
+    (re.compile(r"roadmap|feuille de route", re.IGNORECASE), "product_roadmap", "fact"),
+    (re.compile(r"probl[èe]me|solution|use case|cas d'usage", re.IGNORECASE), "product_description", "fact"),
+]
+
+_MANAGEMENT_CLAIM_PATTERNS = [
+    (re.compile(r"leader (?:du|sur le|de) march[ée]|market leader", re.IGNORECASE), "competitive_position"),
+    (re.compile(r"aucun concurrent|pas de concurrence|no (?:significant )?competitors?", re.IGNORECASE), "competitive_position"),
+    (re.compile(r"propri[ée]taire|proprietary|brevet[ée]?|patented", re.IGNORECASE), "differentiation"),
+    (re.compile(r"unique|seul(?:e)? (?:sur le march[ée]|acteur)|only (?:company|player)", re.IGNORECASE), "differentiation"),
+    (re.compile(r"d'ici 20\d\d|by 20\d\d|objectif|target:", re.IGNORECASE), "traction_projection"),
+]
+
+
+def _mock_extract_structured_fields(deck_text: str) -> list[dict]:
+    return _mock_line_scan(deck_text, _STRUCTURED_FIELD_PATTERNS)
+
+
+def _mock_extract_management_claims(deck_text: str) -> list[dict]:
+    hits = _mock_line_scan(deck_text, [(p, ct, "company_claim") for p, ct in _MANAGEMENT_CLAIM_PATTERNS])
+    for h in hits:
+        h["required_evidence"] = "Non déterminé automatiquement en mode mock - nécessite une passe LLM en direct."
+        h["potential_challenge"] = "Non déterminé automatiquement en mode mock - nécessite une passe LLM en direct."
+        del h["kind"]
+    return hits
+
+
+# decompose_assumptions() pre-dates Phase 1 (Technology's fixed hypothesis already
+# used it) and its original mock fallback was a bare empty list - meaning Pass E
+# (assumption decomposition, applied here to every traction_projection claim)
+# silently produced nothing in mock mode, for ANY deck, regardless of content.
+# That is exactly the "pretend the pipeline works" failure mode this whole phase
+# exists to eliminate - a keyword heuristic below at least surfaces something
+# real and inspectable without a live key, clearly labelled as mock like every
+# other fallback here.
+_ASSUMPTION_KEYWORD_HINTS = [
+    (re.compile(r"march[ée] am[ée]ricain|us market|expansion (?:internationale|aux [ée]tats-unis)|international", re.IGNORECASE),
+     "Suppose que l'expansion sur ce nouveau marché se déroule sans retard majeur (recrutement local, conformité, go-to-market)."),
+    (re.compile(r"clients?\b|customers?\b", re.IGNORECASE),
+     "Suppose que le rythme d'acquisition de nouveaux clients observé jusqu'ici se maintient."),
+    (re.compile(r"conversion", re.IGNORECASE),
+     "Suppose que le taux de conversion actuel reste stable ou s'améliore."),
+    (re.compile(r"r[ée]tention|retention|churn", re.IGNORECASE),
+     "Suppose que le taux de rétention/churn actuel ne se dégrade pas."),
+    (re.compile(r"prix|pricing|tarif", re.IGNORECASE),
+     "Suppose que la structure tarifaire actuelle reste inchangée."),
+]
+
+
+def _mock_decompose_assumptions(claim: str) -> list[dict]:
+    assumptions = []
+    for pattern, assumption_text in _ASSUMPTION_KEYWORD_HINTS:
+        if pattern.search(claim):
+            assumptions.append({
+                "assumption": assumption_text,
+                "plausibility": "aggressive",
+                "reason": "Non déterminé automatiquement en mode mock - nécessite une passe LLM en direct pour juger la plausibilité réelle.",
+            })
+    # Every forecast depends on execution capacity even when no specific keyword
+    # matched above - never leave a projection with zero decomposed assumptions.
+    assumptions.append({
+        "assumption": "Suppose que les moyens commerciaux, techniques et financiers nécessaires seront disponibles pour atteindre cet objectif.",
+        "plausibility": "aggressive",
+        "reason": "Non déterminé automatiquement en mode mock - nécessite une passe LLM en direct pour juger la plausibilité réelle.",
+    })
+    return assumptions
+
+
 class LlmClient:
     def __init__(self):
         self._client = None
@@ -687,8 +855,98 @@ class LlmClient:
         )
         user = f"Claim: {claim}\nContext: {json.dumps(context)}"
         if self.mode == "mock":
-            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"assumptions": []})
+            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"assumptions": _mock_decompose_assumptions(claim)})
         return self._call_json(system, user)
+
+    # ------------------------------------------------------------------
+    # Phase 1 - canonical deal representation: Number Pass B (semantic
+    # classification only - Pass A's recognition/structuring is entirely
+    # deterministic, see services/number_extraction.py, deliberately NOT an
+    # LLM call). "€8m" means nothing without the rest of the deck as
+    # context - this is the one place that context is actually given.
+    # ------------------------------------------------------------------
+    def classify_numbers(self, deck_text: str, numbers: list[dict]) -> LlmResult:
+        system = (
+            "You are given a list of numbers already recognized in a pitch deck (each with its raw text, "
+            "parsed value/unit/currency if known, its surrounding context, and its slide), plus the full deck "
+            "text for context. For EACH number (by index), classify what it actually measures - e.g. revenue, "
+            "ARR, MRR, GMV, users, customers, growth_rate, retention, churn, cac, ltv, acv, gross_margin, cogs, "
+            "burn, runway, pipeline, conversion, sales_cycle, order_volume, units_sold, utilization, engagement, "
+            "funding_amount, valuation, market_size_tam, market_size_sam, market_size_som, headcount, other_kpi. "
+            "Use 'unclassified' ONLY if truly nothing in the deck lets you tell what it measures - do not guess. "
+            "If genuinely ambiguous between 2-3 categories (e.g. an amount that could be revenue OR funding "
+            "raised), return your best single guess as semantic_category with medium/low confidence AND list the "
+            "other real candidates in candidate_categories - never silently pick one and hide the ambiguity. "
+            'Return JSON: {"classifications": [{"index": 0, "semantic_category": "...", '
+            '"semantic_confidence": "high"|"medium"|"low", "candidate_categories": ["..."]}]}'
+        )
+        if self.mode == "mock":
+            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"classifications": _mock_classify_numbers(numbers)})
+        user = f"Numbers to classify:\n{json.dumps(numbers, indent=2)[:14000]}\n\nFull deck text:\n{deck_text[:40000]}"
+        return self._call_json(system, user, max_tokens=3000)
+
+    # ------------------------------------------------------------------
+    # Phase 1 - canonical deal representation: Pass C, structured
+    # Company/Product/Market descriptive fields (kind=fact when the field
+    # is objectively descriptive, kind=company_claim when it's inherently
+    # an assertion e.g. "differentiation"). Deliberately separate from Pass
+    # D (management assertions below) - this pass is "what IS stated",
+    # not "what is being argued".
+    # ------------------------------------------------------------------
+    def extract_structured_fields(self, deck_text: str) -> LlmResult:
+        system = (
+            "Read this pitch deck's raw text and extract every structured Company/Product/Market field it "
+            "states - do not summarize, extract each field as its own item, verbatim or near-verbatim from the "
+            "text. Only extract a field if the deck actually states it - never infer or guess a value. "
+            "claim_type must be one of: company_identity (name, legal name, founding date, HQ, countries of "
+            "operation), funding_history (round, amount raised, valuation, investors), ownership, "
+            "team_background, product_description, product_architecture, product_roadmap, pricing, "
+            "differentiation, distribution, dependency, market_definition (how the deck defines/scopes its "
+            "market - methodology, assumptions - NOT the size number itself, that's captured separately). "
+            "Set kind='fact' for objectively descriptive fields (company_identity, funding_history, ownership, "
+            "team_background, product_description, product_roadmap, distribution) and kind='company_claim' for "
+            "fields that are inherently an assertion or interpretation (differentiation, pricing rationale, "
+            "product_architecture claims of superiority, market_definition methodology choices). "
+            'Return JSON: {"fields": [{"claim_type": "...", "kind": "fact"|"company_claim", "text": "verbatim '
+            'or near-verbatim from the deck", "context": "1 surrounding sentence", "slide_reference": "N" or '
+            'null}]}. Extract as many as the deck actually supports - do not artificially limit the count, and '
+            "do not force something into a field the deck doesn't state."
+        )
+        if self.mode == "mock":
+            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"fields": _mock_extract_structured_fields(deck_text)})
+        return self._call_json(system, deck_text[:60000], max_tokens=4000)
+
+    # ------------------------------------------------------------------
+    # Phase 1 - canonical deal representation: Pass D, management
+    # ASSERTIONS specifically - the narrative/evaluative claims a sharp VC
+    # would want to challenge ("we are the market leader", "no significant
+    # competitors", "our technology is proprietary"), as opposed to Pass
+    # C's plain descriptive fields. Each gets required_evidence (what would
+    # verify it) and potential_challenge (how an analyst would push back) -
+    # this is what makes it usable by a future research/challenge pass,
+    # not just a longer list of extracted text.
+    # ------------------------------------------------------------------
+    def extract_management_claims(self, deck_text: str) -> LlmResult:
+        system = (
+            "Read this pitch deck's raw text and extract every management ASSERTION - a statement that argues "
+            "or evaluates, not just describes. Examples of what counts: 'we are the market leader', 'there are "
+            "no significant competitors', 'our technology is proprietary', 'we will reach EUR50M revenue by "
+            "2030', 'our retention is best-in-class'. Examples of what does NOT count (that's Pass C, not this "
+            "one): 'the company is based in Paris', 'the CEO is Jane Doe' - plain facts, not arguable claims. "
+            "For each assertion, write in French: required_evidence (what evidence would actually verify or "
+            "refute this - be specific, not 'more data'), and potential_challenge (the sharp, specific way an "
+            "experienced VC would push back on this claim - one sentence, no hedging). claim_type must be one "
+            "of: competitive_position, differentiation, traction_projection, market_definition, pricing, "
+            "product_roadmap, other. "
+            'Return JSON: {"claims": [{"claim_type": "...", "text": "verbatim or near-verbatim assertion", '
+            '"context": "1 surrounding sentence", "slide_reference": "N" or null, '
+            '"required_evidence": "...", "potential_challenge": "..."}]}. '
+            "Return an empty list if the deck genuinely contains no such assertions - do not invent one to "
+            "avoid an empty result."
+        )
+        if self.mode == "mock":
+            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"claims": _mock_extract_management_claims(deck_text)})
+        return self._call_json(system, deck_text[:60000], max_tokens=3000)
 
     # ------------------------------------------------------------------
     # 6. Generic qualitative reasoning step (used for the "investment

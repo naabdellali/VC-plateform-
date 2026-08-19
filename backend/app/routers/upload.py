@@ -8,7 +8,7 @@ from app.schemas import AnalyzeResponse, CompanyOut, DeckOut
 from app.services.deck_parser import parse_deck
 from app.services.llm_client import get_llm_client
 from app.rules.saas_rules import evaluate_trigger_rules
-from app.services.reasoning import market_module, traction_module, founders_module, competition_module, business_model_module, technology_module, market_dynamics_module
+from app.services.reasoning import market_module, traction_module, founders_module, competition_module, business_model_module, technology_module, market_dynamics_module, extraction_pipeline
 
 router = APIRouter(prefix="/companies", tags=["upload"])
 
@@ -78,6 +78,17 @@ async def upload_deck(
         extracted_claims_json=extracted_claims,
     )
     db.add(deck)
+    db.flush()
+
+    # Phase 1 - canonical deal representation. Runs ADDITIVELY alongside the
+    # legacy extract_claims() above: it populates the new Number/Claim tables
+    # (numbers extracted+classified separately from interpretation, structured
+    # company/product/market fields, management assertions, and their
+    # decomposed assumptions) without touching any existing reasoning module -
+    # those still read deck.extracted_claims_json exactly as before. Repointing
+    # the reasoning modules onto Claim/Number is deliberately NOT done here -
+    # that's reasoning-engine wiring, out of scope for Phase 1.
+    extraction_pipeline.run_extraction(db, company_id=company.id, deck_id=deck.id, deck_text=parsed.raw_text)
     db.flush()
 
     # Rule engine (spec section 38): which modules does this deck's content

@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     Column, String, Text, DateTime, ForeignKey, Enum, JSON, Float, Boolean
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 
 from app.db import Base
 
@@ -85,6 +85,76 @@ class RedFlagSeverity(str, enum.Enum):
     watch = "watch"
 
 
+class NumberSemanticCategory(str, enum.Enum):
+    """What a given extracted number actually IS - assigned in a second pass,
+    deliberately separate from the first pass that just recognizes the number
+    exists (see Number model + services/number_extraction.py). "€8m" means
+    nothing on its own; it needs the rest of the deck as context before it
+    can be labelled revenue vs. ARR vs. funding vs. TAM."""
+    revenue = "revenue"
+    arr = "arr"
+    mrr = "mrr"
+    gmv = "gmv"
+    users = "users"
+    customers = "customers"
+    growth_rate = "growth_rate"
+    retention = "retention"
+    churn = "churn"
+    cac = "cac"
+    ltv = "ltv"
+    acv = "acv"
+    gross_margin = "gross_margin"
+    cogs = "cogs"
+    burn = "burn"
+    runway = "runway"
+    pipeline = "pipeline"
+    conversion = "conversion"
+    sales_cycle = "sales_cycle"
+    order_volume = "order_volume"
+    units_sold = "units_sold"
+    utilization = "utilization"
+    engagement = "engagement"
+    funding_amount = "funding_amount"
+    valuation = "valuation"
+    market_size_tam = "market_size_tam"
+    market_size_sam = "market_size_sam"
+    market_size_som = "market_size_som"
+    headcount = "headcount"
+    other_kpi = "other_kpi"
+    unclassified = "unclassified"  # default right after pass A, before pass B runs
+
+
+class ClaimKind(str, enum.Enum):
+    """The epistemic status of a Claim row - NOT its subject matter
+    (that's claim_type). These four must never be interchangeable
+    (per-analyst instruction): a fact is descriptive and directly
+    supported; a company_claim is management's own assertion and starts
+    unverified; an assumption is a condition a claim/forecast depends on;
+    an inference is a conclusion OUR reasoning produced, never extracted."""
+    fact = "fact"
+    company_claim = "company_claim"
+    assumption = "assumption"
+    inference = "inference"
+
+
+class ClaimVerificationStatus(str, enum.Enum):
+    unverified = "unverified"
+    supported = "supported"
+    contradicted = "contradicted"
+    insufficient_evidence = "insufficient_evidence"
+
+
+class ClaimRelationship(str, enum.Enum):
+    """Only meaningful when parent_claim_id is set - the minimal relationship
+    vocabulary for Phase 1. Deliberately NOT a general graph-traversal engine
+    (that's Phase 3) - just enough to record "this assumption underpins that
+    forecast" and "this inference was derived from that claim"."""
+    assumption_of = "assumption_of"
+    derived_from = "derived_from"
+    contradicts = "contradicts"
+    supports = "supports"
+
+
 class Recommendation(str, enum.Enum):
     invest = "invest"
     pass_ = "pass"
@@ -114,6 +184,8 @@ class Company(Base):
     module_results = relationship("ModuleResult", back_populates="company", cascade="all, delete-orphan")
     red_flags = relationship("RedFlag", back_populates="company", cascade="all, delete-orphan")
     memos = relationship("Memo", back_populates="company", cascade="all, delete-orphan")
+    numbers = relationship("Number", back_populates="company", cascade="all, delete-orphan")
+    claims = relationship("Claim", back_populates="company", cascade="all, delete-orphan")
 
 
 class Deck(Base):
@@ -131,6 +203,128 @@ class Deck(Base):
     extracted_claims_json = Column(JSON, nullable=True)
 
     company = relationship("Company", back_populates="decks")
+
+
+class Claim(Base):
+    """
+    Phase 1: the canonical, first-class representation of everything a deck
+    (or later, an external source, or our own reasoning) says about a
+    company - unifying Fact / Company claim / Assumption / Inference under
+    one table distinguished by `kind`, rather than four near-identical
+    tables. `claim_type` is the subject-matter taxonomy (company identity,
+    funding history, market size, traction metric...) and is deliberately a
+    plain String (app-validated, see services/claim_taxonomy.py) rather than
+    a native DB enum, since this taxonomy is expected to keep growing as
+    real decks are run through it - a String needs no migration to extend,
+    a Postgres native enum does.
+
+    This table is what modules should query going forward instead of
+    Deck.extracted_claims_json (kept only as a raw-output audit trail) -
+    the fix for claims being extracted once and then silently dropped for
+    categories no module happened to read.
+    """
+    __tablename__ = "claims"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    company_id = Column(String, ForeignKey("companies.id"), nullable=False)
+    deck_id = Column(String, ForeignKey("decks.id"), nullable=True)  # null for a pure platform-reasoning inference
+
+    kind = Column(Enum(ClaimKind), nullable=False)
+    claim_type = Column(String, nullable=False)  # see services/claim_taxonomy.py for the validated vocabulary
+
+    text = Column(Text, nullable=False)         # verbatim wording (fact/company_claim) or synthesized statement
+    context = Column(Text, nullable=True)       # surrounding text / rationale
+    slide_reference = Column(String, nullable=True)
+    source = Column(String, nullable=True)      # "deck" | "external_source" | "platform_reasoning"
+
+    verification_status = Column(Enum(ClaimVerificationStatus), default=ClaimVerificationStatus.unverified, nullable=False)
+    required_evidence = Column(Text, nullable=True)    # what would verify/refute this claim
+    potential_challenge = Column(Text, nullable=True)  # how a sharp VC would push back on this
+    related_modules = Column(JSON, nullable=True)      # list of module keys this claim is relevant to
+
+    parent_claim_id = Column(String, ForeignKey("claims.id"), nullable=True)
+    relationship_type = Column(Enum(ClaimRelationship), nullable=True)
+
+    created_at = Column(DateTime, default=_now)
+
+    company = relationship("Company", back_populates="claims")
+    deck = relationship("Deck")
+    numbers = relationship("Number", back_populates="claim")
+    children = relationship("Claim", backref=backref("parent_claim", remote_side=[id]))
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "kind": self.kind.value if self.kind else None,
+            "claim_type": self.claim_type,
+            "text": self.text,
+            "context": self.context,
+            "slide_reference": self.slide_reference,
+            "source": self.source,
+            "verification_status": self.verification_status.value if self.verification_status else None,
+            "required_evidence": self.required_evidence,
+            "potential_challenge": self.potential_challenge,
+            "related_modules": self.related_modules or [],
+            "parent_claim_id": self.parent_claim_id,
+            "relationship_type": self.relationship_type.value if self.relationship_type else None,
+        }
+
+
+class Number(Base):
+    """
+    Phase 1: numbers get their own extraction pass, deliberately separate
+    from interpretation (per-analyst instruction: "do not interpret a
+    number before preserving the raw evidence"). A Number row is created by
+    a deterministic/regex-assisted recognition pass BEFORE any semantic
+    meaning is assigned; `semantic_category` starts at "unclassified" and is
+    filled in by a later pass that sees the whole deck - the raw row is
+    never overwritten, only annotated.
+    """
+    __tablename__ = "numbers"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    company_id = Column(String, ForeignKey("companies.id"), nullable=False)
+    deck_id = Column(String, ForeignKey("decks.id"), nullable=False)
+
+    raw_text = Column(String, nullable=False)     # verbatim, e.g. "€8m"
+    value = Column(Float, nullable=True)          # normalized float, null if unparseable
+    unit = Column(String, nullable=True)          # "EUR" | "USD" | "%" | "count" | "months" | "x" ...
+    currency = Column(String, nullable=True)
+    period = Column(String, nullable=True)        # free text as stated, e.g. "Q4 2025"
+    as_of_date = Column(String, nullable=True)    # free text explicit date if stated
+    definition = Column(Text, nullable=True)      # how the deck defines this number, if stated
+    slide_reference = Column(String, nullable=True)
+    context = Column(Text, nullable=True)         # verbatim surrounding sentence(s)
+
+    semantic_category = Column(Enum(NumberSemanticCategory), default=NumberSemanticCategory.unclassified, nullable=False)
+    semantic_confidence = Column(String, nullable=True)  # "high" | "medium" | "low"
+    candidate_categories = Column(JSON, nullable=True)   # kept when genuinely ambiguous
+
+    claim_id = Column(String, ForeignKey("claims.id"), nullable=True)
+
+    created_at = Column(DateTime, default=_now)
+
+    company = relationship("Company", back_populates="numbers")
+    deck = relationship("Deck")
+    claim = relationship("Claim", back_populates="numbers")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "raw_text": self.raw_text,
+            "value": self.value,
+            "unit": self.unit,
+            "currency": self.currency,
+            "period": self.period,
+            "as_of_date": self.as_of_date,
+            "definition": self.definition,
+            "slide_reference": self.slide_reference,
+            "context": self.context,
+            "semantic_category": self.semantic_category.value if self.semantic_category else None,
+            "semantic_confidence": self.semantic_confidence,
+            "candidate_categories": self.candidate_categories or [],
+            "claim_id": self.claim_id,
+        }
 
 
 class Evidence(Base):
@@ -160,6 +354,12 @@ class Evidence(Base):
     methodology = Column(Text, nullable=True)          # how a calculation/estimate was produced
     supporting_excerpt = Column(Text, nullable=True)   # verbatim snippet backing the claim
     assumptions_json = Column(JSON, nullable=True)      # list of assumption strings used to get here
+
+    # Phase 1 (canonical deal representation): which Claim this Evidence verifies/refutes,
+    # if any - closes the provenance chain deck -> slide -> Claim/Number -> Evidence ->
+    # ModuleResult into real foreign keys instead of text matching. Nullable: plenty of
+    # Evidence (e.g. a platform_calculation) isn't "verifying a claim" in this sense.
+    claim_id = Column(String, ForeignKey("claims.id"), nullable=True)
 
     created_at = Column(DateTime, default=_now)
 
