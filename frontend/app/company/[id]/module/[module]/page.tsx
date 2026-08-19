@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { api, ModuleResult, Evidence } from "@/lib/api";
+import { api, ModuleResult, Evidence, RedFlag } from "@/lib/api";
 import MarketRecalculateForm from "@/components/MarketRecalculateForm";
 import TractionForensicsForms from "@/components/TractionForensicsForms";
 import CompetitorGrid from "@/components/CompetitorGrid";
@@ -11,9 +11,12 @@ import TamSamSomView, { TamSamSom } from "@/components/TamSamSomView";
 import CompetitiveLandscapeView, { CompetitiveLandscape } from "@/components/CompetitiveLandscapeView";
 import MoatView, { Moat } from "@/components/MoatView";
 import TechnologyView, { TechnologyData } from "@/components/TechnologyView";
+import MarketDynamicsView, { MarketDynamicsData } from "@/components/MarketDynamicsView";
+import QuestionsToAsk from "@/components/QuestionsToAsk";
 
 const MODULE_LABELS: Record<string, string> = {
   market: "Market Sizing",
+  market_dynamics: "Market Dynamics",
   competition: "Competitive Landscape",
   moat: "Moat",
   technology: "Technology",
@@ -22,7 +25,7 @@ const MODULE_LABELS: Record<string, string> = {
   founders: "Team & Background",
 };
 
-type BusinessModelData = { label: string; pricing_model: string | null; target_segment: string | null };
+type BusinessModelData = { label: string; pricing_model: string | null; target_segment: string | null; explanation: string | null };
 type Founder = { name: string; title: string | null; status: "positive" | "flag" | "unverified"; status_label: string; detail: string | null };
 type TractionClaim = { claim: string; value: string | null };
 type TractionData = { today: TractionClaim[]; tomorrow: TractionClaim[] };
@@ -40,12 +43,14 @@ export default function ModuleDetailPage() {
 
   const [result, setResult] = useState<ModuleResult | null | "not_found">(null);
   const [evidence, setEvidence] = useState<Evidence[]>([]);
+  const [redFlags, setRedFlags] = useState<RedFlag[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     if (!companyId || !module) return;
     api.getModule(companyId, module).then(setResult).catch(() => setResult("not_found"));
     api.listEvidence(companyId, module).then(setEvidence).catch((e) => setError(String(e)));
+    api.listRedFlags(companyId).then(setRedFlags).catch(() => {});
   }, [companyId, module]);
 
   useEffect(() => refresh(), [refresh]);
@@ -84,6 +89,19 @@ export default function ModuleDetailPage() {
     try {
       const parsed = JSON.parse(raw);
       if (parsed && parsed.matrix) return parsed as CompetitiveLandscape;
+    } catch {
+      /* not JSON */
+    }
+    return null;
+  }, [module, hasResult, result]);
+
+  const marketDynamics = useMemo<MarketDynamicsData | null>(() => {
+    if (module !== "market_dynamics" || !hasResult) return null;
+    const raw = (result as ModuleResult).platform_value;
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && (parsed.trend || parsed.consolidation)) return parsed as MarketDynamicsData;
     } catch {
       /* not JSON */
     }
@@ -142,6 +160,7 @@ export default function ModuleDetailPage() {
     return null;
   }, [module, hasResult, result]);
 
+  const [bmExplanationOpen, setBmExplanationOpen] = useState(false);
   const [expandedFounders, setExpandedFounders] = useState<Set<number>>(new Set());
   const toggleFounder = (i: number) => {
     setExpandedFounders((prev) => {
@@ -165,7 +184,7 @@ export default function ModuleDetailPage() {
     return null;
   }, [module, hasResult, result]);
 
-  const platformDisplay = hasResult && !tamSamSom && !landscape && !moat && !technology && !businessModel && !founders && !traction ? formatMoneyMaybe((result as ModuleResult).platform_value) : null;
+  const platformDisplay = hasResult && !tamSamSom && !landscape && !moat && !technology && !businessModel && !founders && !traction && !marketDynamics ? formatMoneyMaybe((result as ModuleResult).platform_value) : null;
   const deckDisplay = hasResult ? formatMoneyMaybe((result as ModuleResult).deck_value) : null;
 
   return (
@@ -193,6 +212,8 @@ export default function ModuleDetailPage() {
 
           {module === "market" && tamSamSom ? (
             <TamSamSomView data={tamSamSom} />
+          ) : module === "market_dynamics" && marketDynamics ? (
+            <MarketDynamicsView data={marketDynamics} />
           ) : module === "competition" && landscape ? (
             <CompetitiveLandscapeView data={landscape} />
           ) : module === "moat" && moat ? (
@@ -215,6 +236,14 @@ export default function ModuleDetailPage() {
               )}
               {!businessModel.pricing_model && !businessModel.target_segment && (
                 <p className="hero-empty">{(result as ModuleResult).headline}</p>
+              )}
+              {businessModel.explanation && (
+                <div className={`bm-explanation${bmExplanationOpen ? " expanded" : ""}`} onClick={() => setBmExplanationOpen((v) => !v)}>
+                  <div className="bm-explanation-toggle">
+                    {bmExplanationOpen ? "Masquer le détail ▲" : "Comment ça marche concrètement ▼"}
+                  </div>
+                  {bmExplanationOpen && <p className="bm-explanation-text">{businessModel.explanation}</p>}
+                </div>
               )}
             </div>
           ) : module === "founders" && founders ? (
@@ -300,6 +329,8 @@ export default function ModuleDetailPage() {
               ? "Produced in mock mode (no live LLM configured)."
               : "Produced in live mode."}
           </div>
+
+          <QuestionsToAsk moduleKey={module} redFlags={redFlags} extraQuestions={module === "technology" ? technology?.questions_to_ask : undefined} />
         </div>
       )}
 

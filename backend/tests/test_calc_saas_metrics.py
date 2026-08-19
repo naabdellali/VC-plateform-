@@ -53,14 +53,14 @@ def test_mrr_quality_check_flags_volatile_series():
     series = [100_000, 140_000, 95_000, 150_000, 90_000, 160_000]
     report = mrr_quality_check(series)
     assert report.coefficient_of_variation > 0.15
-    assert any("volatility" in f for f in report.flags)
+    assert any("volatilité" in f for f in report.flags)
 
 
 def test_mrr_quality_check_clean_series_no_flag():
     series = [100_000, 108_000, 116_000, 125_000, 134_000, 144_000]
     report = mrr_quality_check(series)
     assert report.declining_months == 0
-    assert report.flags == ["No volatility red flag detected from the reported series alone."]
+    assert report.flags == ["Aucun red flag de volatilité détecté sur la série déclarée seule."]
 
 
 def test_cac_ltv_consistency_check_flags_implausible_claim():

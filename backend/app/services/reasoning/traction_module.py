@@ -66,7 +66,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             claim=c.get("claim", "Traction projection claim"), value=c.get("value"),
             origin=EvidenceOrigin.company_claim, source_tier=SourceTier.deck,
             confidence=Confidence.low,
-            methodology="Projection stated by the company - forward-looking, not yet achieved, not independently verifiable.",
+            methodology="Projection annoncée par l'entreprise - prospective, pas encore atteinte, non vérifiable indépendamment.",
             source_name=f"Pitch deck ({deck.filename})", supporting_excerpt=c.get("claim"),
         )
         evidence_ids.append(ev.id)
@@ -101,7 +101,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
     synth_ev = add_evidence(
         db, company_id=company.id, module=MODULE,
         claim="External corroboration of customer traction",
-        value=synth_payload.get("answer", "Unable to independently verify."),
+        value=synth_payload.get("answer", "Impossible de vérifier indépendamment."),
         origin=EvidenceOrigin.platform_inference,
         source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
         confidence={"high": Confidence.high, "medium": Confidence.medium, "low": Confidence.low}.get(
@@ -119,12 +119,12 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         add_red_flag(
             db, company_id=company.id, module=MODULE, category="financial",
             severity=RedFlagSeverity.major,
-            explanation="Public sources reference pilots/POCs/trials for customers the deck presents as production traction.",
+            explanation="Des sources publiques évoquent des pilotes/POC/essais pour des clients présentés comme de la traction de production dans le deck.",
             evidence_id=synth_ev.id,
-            potential_impact="Reported traction may overstate the share of revenue that is truly recurring and committed.",
-            resolving_information="Ask management to break down revenue by contract status (signed production vs. pilot/POC).",
+            potential_impact="La traction déclarée pourrait surestimer la part de revenu réellement récurrente et engagée.",
+            resolving_information="Demander au management de détailler le revenu par statut de contrat (production signée vs. pilote/POC).",
         )
-        trace.add("contradictions", ["Public sources suggest pilot/POC status for traction presented as production revenue."])
+        trace.add("contradictions", ["Des sources publiques suggèrent un statut pilote/POC pour une traction présentée comme du revenu de production."])
 
     status = ModuleStatus.needs_review if traction_claims else ModuleStatus.insufficient_evidence
     headline = (
@@ -153,7 +153,7 @@ def submit_mrr_series(db: Session, company: Company, monthly_values_eur: list[fl
         claim="MRR quality / volatility check", value=report.as_evidence_payload(),
         value_type="json", origin=EvidenceOrigin.platform_calculation,
         source_tier=SourceTier.calculation, confidence=Confidence.high,
-        methodology="Coefficient of variation + month-over-month decline ratio on analyst-submitted MRR series.",
+        methodology="Coefficient de variation + taux de baisse mois par mois sur la série de MRR soumise par l'analyste.",
     )
     severity = None
     if report.coefficient_of_variation > 0.15:
@@ -162,8 +162,8 @@ def submit_mrr_series(db: Session, company: Company, monthly_values_eur: list[fl
         add_red_flag(
             db, company_id=company.id, module=MODULE, category="financial", severity=severity,
             explanation=report.flags[0], evidence_id=calc_ev.id,
-            potential_impact="Reported MRR may include non-recurring services/project revenue, inflating perceived recurring traction.",
-            resolving_information="Request a revenue breakdown by recurring vs. one-off/services line items.",
+            potential_impact="Le MRR déclaré pourrait inclure du revenu de services/projets non récurrent, gonflant la traction récurrente perçue.",
+            resolving_information="Demander une répartition du revenu entre récurrent et ponctuel/services.",
         )
 
     result = db.query(ModuleResult).filter(ModuleResult.company_id == company.id, ModuleResult.module == MODULE).one_or_none()
@@ -206,8 +206,8 @@ def submit_cac_ltv_check(db: Session, company: Company, *, cac: float, reported_
         add_red_flag(
             db, company_id=company.id, module=MODULE, category="financial", severity=RedFlagSeverity.major,
             explanation=result_payload["explanation"], evidence_id=calc_ev.id,
-            potential_impact="Reported LTV (and therefore LTV:CAC) may be materially overstated.",
-            resolving_information="Ask for the actual churn cohort data underlying the reported LTV.",
+            potential_impact="Le LTV déclaré (et donc le ratio LTV:CAC) pourrait être significativement surestimé.",
+            resolving_information="Demander les données de cohorte de churn réelles derrière le LTV déclaré.",
         )
     return result_payload
 

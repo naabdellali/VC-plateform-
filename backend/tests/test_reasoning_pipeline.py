@@ -66,7 +66,7 @@ def test_traction_module_auto_pass_and_mrr_series_flow(db_session, sample_compan
 
     from app.models import RedFlag
     flags = db_session.query(RedFlag).filter_by(company_id=sample_company.id, module="traction").all()
-    assert any("volatility" in f.explanation for f in flags)
+    assert any("volatilité" in f.explanation for f in flags)
 
 
 def test_cac_ltv_consistency_flow(db_session, sample_company, sample_deck):

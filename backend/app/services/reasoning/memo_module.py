@@ -20,13 +20,14 @@ import re
 
 from sqlalchemy.orm import Session
 
-from app.models import Company, Deck, ModuleResult, RedFlag, RedFlagSeverity, Memo, Recommendation
+from app.models import Company, Deck, ModuleResult, RedFlag, RedFlagSeverity, Memo, Recommendation, Stage
 from app.services.calc.parsing import parse_money
 from app.services.llm_client import get_llm_client
 
-MODULES_IN_MEMO_ORDER = ["market", "competition", "moat", "technology", "traction", "founders"]
+MODULES_IN_MEMO_ORDER = ["market", "market_dynamics", "competition", "moat", "technology", "traction", "founders"]
 MODULE_LABELS = {
     "market": "Taille de marché (TAM / SAM / SOM)",
+    "market_dynamics": "Dynamique de marché",
     "competition": "Paysage concurrentiel",
     "moat": "Moat (barrière à l'entrée)",
     "technology": "Technologie",
@@ -34,12 +35,27 @@ MODULE_LABELS = {
     "founders": "Team & Background",
 }
 
+CATEGORY_LABEL_FR = {
+    "market": "Marché",
+    "market_dynamics": "Marché",
+    "competition": "Concurrence",
+    "moat": "Moat",
+    "technology": "Technologie",
+    "traction": "Traction",
+    "financial": "Financier",
+    "team": "Équipe",
+    "founders": "Équipe",
+    "business_model": "Business model",
+}
 
-def _score_recommendation(module_results: list[ModuleResult], red_flags: list[RedFlag]) -> tuple[Recommendation, str]:
+_EARLY_STAGES = {Stage.pre_seed, Stage.seed}
+
+
+def _score_recommendation(module_results: list[ModuleResult], red_flags: list[RedFlag], stage: Stage | None = None) -> tuple[Recommendation, str]:
     """The Recommendation enum stays internal/deterministic (spec section 53: no black-box
     conclusions) - the memo frontend reframes it as a simple "continue analyzing or not" call,
     per analyst feedback that "invest/pass/watchlist" reads like a premature verdict this early.
-    Rationale is kept to one short French sentence - the point is a signal, not a essay."""
+    Rationale is kept to one short French sentence (or two) - the point is a signal, not an essay."""
     critical = [f for f in red_flags if f.severity == RedFlagSeverity.critical]
     major = [f for f in red_flags if f.severity == RedFlagSeverity.major]
     insufficient = [m for m in module_results if m.status.value == "insufficient_evidence"]
@@ -50,6 +66,16 @@ def _score_recommendation(module_results: list[ModuleResult], red_flags: list[Re
         return Recommendation.need_more_data, "Trop peu d'éléments vérifiables pour l'instant - le deck et/ou la data room ne permettent pas de conclure seuls."
     if len(major) >= 2:
         return Recommendation.watchlist, f"{len(major)} red flag(s) majeur(s) à lever avant d'aller plus loin."
+
+    # At pre-seed/seed, precise financial modelling is premature by nature - what actually
+    # de-risks the deal at this stage is evidence of product/market fit, not "calculs à
+    # compléter" (which reads as a generic, checklist-style non-answer for a company this early).
+    if stage in _EARLY_STAGES:
+        return Recommendation.need_more_data, (
+            "Aucun red flag disqualifiant. À ce stade (early-stage), l'enjeu n'est pas la précision des calculs "
+            "financiers mais la preuve du product-market fit : clarté du problème adressé, retours clients réels "
+            "et premiers signaux de rétention. C'est ce qu'il faut creuser avant de statuer."
+        )
     return Recommendation.need_more_data, "Aucun red flag disqualifiant, mais des calculs clés restent à compléter avec des données analyste (marché, MRR, CAC/LTV)."
 
 
@@ -127,6 +153,28 @@ def generate_memo(db: Session, company: Company) -> Memo:
             sections.append({"title": MODULE_LABELS[module_key], "kind": kind, "data": structured, "body": "", "evidence_ids": mr.evidence_ids_json or []})
             continue
 
+        # Market Dynamics: trend + consolidation/M&A as its own short paragraph, distinct from
+        # the TAM/SAM/SOM size table right above it and the competitive landscape right below it.
+        if module_key == "market_dynamics" and mr.platform_value:
+            try:
+                dyn = json.loads(mr.platform_value)
+            except (ValueError, TypeError):
+                dyn = None
+            if isinstance(dyn, dict):
+                paragraphs = []
+                if dyn.get("trend_label"):
+                    trend_p = dyn["trend_label"] + "."
+                    if dyn.get("trend_reasoning"):
+                        trend_p += f" {dyn['trend_reasoning']}"
+                    paragraphs.append(trend_p)
+                if dyn.get("consolidation"):
+                    paragraphs.append(dyn["consolidation"])
+                if dyn.get("key_drivers"):
+                    paragraphs.append("Facteurs identifiés : " + ", ".join(dyn["key_drivers"]) + ".")
+                if paragraphs:
+                    sections.append({"title": MODULE_LABELS[module_key], "body": "\n\n".join(paragraphs), "evidence_ids": mr.evidence_ids_json or []})
+                    continue
+
         # Technology: describe what the tech actually IS before mentioning any
         # dependency - leading with "critical dependency" with no context read
         # as alarmist and left the reader with no idea what the product does.
@@ -136,19 +184,32 @@ def generate_memo(db: Session, company: Company) -> Memo:
             except (ValueError, TypeError):
                 tech = None
             if isinstance(tech, dict):
-                parts = []
+                # One short paragraph per idea (what it is / grade / proprietary / risk), separated
+                # by blank lines rather than run-on-comma prose - avoids the "vague and repetitive"
+                # read where every sentence started with "Nous avons identifié..."/"Dépendance...".
+                paragraphs = []
                 if tech.get("tech_summary"):
-                    parts.append(tech["tech_summary"])
+                    paragraphs.append(tech["tech_summary"])
+                if tech.get("tech_grade"):
+                    grade_p = f"Niveau technique : {tech['tech_grade']}."
+                    if tech.get("tech_grade_reason"):
+                        grade_p += f" {tech['tech_grade_reason']}"
+                    paragraphs.append(grade_p)
                 if tech.get("proprietary"):
-                    parts.append(f"Ils sont propriétaires de : {', '.join(tech['proprietary'])}.")
-                critical_deps = [d["name"] for d in (tech.get("dependencies") or []) if d.get("critical")]
-                other_deps = [d["name"] for d in (tech.get("dependencies") or []) if not d.get("critical")]
+                    paragraphs.append(f"Élément(s) propriétaire(s) déclaré(s) : {', '.join(tech['proprietary'])}.")
+                deps = tech.get("dependencies") or []
+                critical_deps = [d for d in deps if d.get("critical")]
+                other_deps = [d for d in deps if not d.get("critical")]
                 if critical_deps:
-                    parts.append(f"Nous avons identifié une dépendance potentiellement critique à : {', '.join(critical_deps)}.")
+                    dep_bits = [
+                        f"{d['name']} — {d['risk_note']}" if d.get("risk_note") else d["name"]
+                        for d in critical_deps
+                    ]
+                    paragraphs.append("Dépendance(s) jugée(s) critique(s) : " + " ; ".join(dep_bits) + ".")
                 if other_deps:
-                    parts.append(f"Dépendance(s) non critique(s) : {', '.join(other_deps)}.")
-                if parts:
-                    sections.append({"title": MODULE_LABELS[module_key], "body": " ".join(parts), "evidence_ids": mr.evidence_ids_json or []})
+                    paragraphs.append("Autre(s) dépendance(s), non critique(s) : " + ", ".join(d["name"] for d in other_deps) + ".")
+                if paragraphs:
+                    sections.append({"title": MODULE_LABELS[module_key], "body": "\n\n".join(paragraphs), "evidence_ids": mr.evidence_ids_json or []})
                     continue
 
         body = mr.headline or "Pas encore de conclusion."
@@ -157,25 +218,39 @@ def generate_memo(db: Session, company: Company) -> Memo:
         sections.append({"title": MODULE_LABELS[module_key], "body": body, "evidence_ids": mr.evidence_ids_json or []})
 
     SEV_LABEL_FR = {"critical": "Critique", "major": "Majeur", "watch": "À surveiller"}
+    SEV_ORDER = {"critical": 0, "major": 1, "watch": 2}
     if red_flags:
-        narrative = None
-        if llm.mode == "live":
-            narr_result = llm.narrate_red_flags([{"severity": f.severity.value, "explanation": f.explanation} for f in red_flags])
-            narrative = (narr_result.parsed or {}).get("narrative")
-            if narrative:
-                narrative = re.sub(r"^#+\s*", "", narrative.strip())
-        if narrative:
-            body = narrative
-        else:
-            # Mock mode / narration unavailable: fall back to a plain, honest listing
-            # rather than fabricate connective prose we can't actually produce yet.
-            flag_lines = [f"[{SEV_LABEL_FR.get(f.severity.value, f.severity.value)}] {f.explanation}" for f in red_flags]
-            body = "\n".join(flag_lines)
+        # Grouped by category (Marché, Concurrence, Moat...) rather than one flat list repeating
+        # nothing about where each flag came from - each category gets its own short block, worst
+        # severity first, so the reader can tell at a glance which part of the diligence is shakiest.
+        by_category: dict[str, list[RedFlag]] = {}
+        for f in red_flags:
+            by_category.setdefault(f.category or "other", []).append(f)
+        ordered_cats = sorted(
+            by_category.keys(),
+            key=lambda c: min(SEV_ORDER.get(f.severity.value, 9) for f in by_category[c]),
+        )
+        blocks = []
+        for cat in ordered_cats:
+            cat_flags = sorted(by_category[cat], key=lambda f: SEV_ORDER.get(f.severity.value, 9))
+            cat_label = CATEGORY_LABEL_FR.get(cat, cat.replace("_", " ").title())
+            narrative = None
+            if llm.mode == "live":
+                narr_result = llm.narrate_red_flags([{"severity": f.severity.value, "explanation": f.explanation} for f in cat_flags])
+                narrative = (narr_result.parsed or {}).get("narrative")
+                if narrative:
+                    narrative = re.sub(r"^#+\s*", "", narrative.strip())
+            if not narrative:
+                # Mock mode / narration unavailable: fall back to a plain, honest listing
+                # rather than fabricate connective prose we can't actually produce yet.
+                narrative = "\n".join(f"[{SEV_LABEL_FR.get(f.severity.value, f.severity.value)}] {f.explanation}" for f in cat_flags)
+            blocks.append(f"{cat_label} :\n{narrative}")
+        body = "\n\n".join(blocks)
         sections.append({"title": "Red Flags", "body": body, "evidence_ids": [f.evidence_id for f in red_flags if f.evidence_id]})
     else:
         sections.append({"title": "Red Flags", "body": "Aucun red flag identifié par l'analyse automatique.", "evidence_ids": []})
 
-    recommendation, rationale = _score_recommendation(module_results, red_flags)
+    recommendation, rationale = _score_recommendation(module_results, red_flags, company.stage)
     CONTINUE_LABEL = {
         "invest": "Continuer — dossier prioritaire",
         "pass": "Ne pas continuer",
@@ -213,7 +288,7 @@ def generate_memo(db: Session, company: Company) -> Memo:
             # Defensive: strip any stray markdown heading/fence the model might emit despite
             # being told not to, so it never renders as a literal "#" in the document.
             description = re.sub(r"^#+\s*", "", description.strip())
-            sections.insert(1, {"title": "Résumé", "body": description, "evidence_ids": []})
+            sections.insert(1, {"title": "Executive Summary", "body": description, "evidence_ids": []})
 
     memo = Memo(
         company_id=company.id,

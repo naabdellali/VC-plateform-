@@ -27,13 +27,18 @@ const SEV_LABEL: Record<string, string> = {
 
 const CATEGORY_LABEL: Record<string, string> = {
   market: "Marché",
+  market_dynamics: "Dynamique de marché",
   competition: "Concurrence",
   moat: "Moat",
   technology: "Technologie",
   traction: "Traction",
   business_model: "Business model",
   founders: "Équipe",
+  team: "Équipe",
+  financial: "Financier",
 };
+
+const CATEGORY_ORDER = ["market", "market_dynamics", "competition", "moat", "technology", "traction", "financial", "team", "founders", "business_model"];
 
 const SEV_ORDER: Record<string, number> = { critical: 0, major: 1, watch: 2 };
 
@@ -105,35 +110,57 @@ export default function CompanyTrayPage() {
         <h2>Red flags summary</h2>
         {flags === null && <p style={{ color: "var(--text-dim)" }}>Loading...</p>}
         {flags?.length === 0 && <p style={{ color: "var(--text-dim)" }}>No red flags identified yet.</p>}
-        <div className="redflags-grid">
-          {[...(flags || [])].sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9)).map((f) => {
-            const isExpanded = expandedFlags.has(f.id) || hoveredFlag === f.id;
-            return (
-              <div
-                key={f.id}
-                className={`redflag-card sev-${f.severity}${isExpanded ? " expanded" : ""}`}
-                onClick={() => toggleFlag(f.id)}
-                onMouseEnter={() => setHoveredFlag(f.id)}
-                onMouseLeave={() => setHoveredFlag(null)}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span className="redflag-icon" style={{ color: `var(--sev-${f.severity})` }}>{SEV_ICON[f.severity] || "●"}</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: `var(--sev-${f.severity})` }}>
-                    {SEV_LABEL[f.severity] || f.severity}
-                  </span>
-                </div>
-                <div className="redflag-summary">
-                  {CATEGORY_LABEL[f.category] || titleCase(f.category)}
-                </div>
-                <div className="redflag-detail">
-                  <div className="redflag-text">{f.explanation}</div>
-                  {f.potential_impact && <div className="redflag-meta"><b>Impact :</b> {f.potential_impact}</div>}
-                  {f.resolving_information && <div className="redflag-meta"><b>Pour lever le doute :</b> {f.resolving_information}</div>}
-                </div>
+        {(() => {
+          const groups = new Map<string, RedFlag[]>();
+          for (const f of flags || []) {
+            const key = f.category || "other";
+            const list = groups.get(key) || [];
+            list.push(f);
+            groups.set(key, list);
+          }
+          const orderedCats = Array.from(groups.keys()).sort((a, b) => {
+            const ai = CATEGORY_ORDER.indexOf(a);
+            const bi = CATEGORY_ORDER.indexOf(b);
+            const worstA = Math.min(...groups.get(a)!.map((f) => SEV_ORDER[f.severity] ?? 9));
+            const worstB = Math.min(...groups.get(b)!.map((f) => SEV_ORDER[f.severity] ?? 9));
+            if (worstA !== worstB) return worstA - worstB;
+            return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+          });
+          return orderedCats.map((cat) => (
+            <div key={cat} className="redflag-group">
+              <div className="redflag-group-heading">{CATEGORY_LABEL[cat] || titleCase(cat)}</div>
+              <div className="redflags-grid">
+                {[...groups.get(cat)!].sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9)).map((f) => {
+                  const isExpanded = expandedFlags.has(f.id) || hoveredFlag === f.id;
+                  return (
+                    <div
+                      key={f.id}
+                      className={`redflag-card sev-${f.severity}${isExpanded ? " expanded" : ""}`}
+                      onClick={() => toggleFlag(f.id)}
+                      onMouseEnter={() => setHoveredFlag(f.id)}
+                      onMouseLeave={() => setHoveredFlag(null)}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span className="redflag-icon" style={{ color: `var(--sev-${f.severity})` }}>{SEV_ICON[f.severity] || "●"}</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: `var(--sev-${f.severity})` }}>
+                          {SEV_LABEL[f.severity] || f.severity}
+                        </span>
+                      </div>
+                      <div className="redflag-summary">
+                        {f.explanation.length > 90 ? `${f.explanation.slice(0, 90)}…` : f.explanation}
+                      </div>
+                      <div className="redflag-detail">
+                        <div className="redflag-text">{f.explanation}</div>
+                        {f.potential_impact && <div className="redflag-meta"><b>Impact :</b> {f.potential_impact}</div>}
+                        {f.resolving_information && <div className="redflag-meta"><b>Pour lever le doute :</b> {f.resolving_information}</div>}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
-        </div>
+            </div>
+          ));
+        })()}
       </div>
     </div>
   );

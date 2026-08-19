@@ -102,13 +102,13 @@ def compare_estimates(company_value_eur: float, platform_estimate: MarketEstimat
         ratio = platform_estimate.value_eur / company_value_eur
 
     if ratio is None:
-        verdict = "Company did not disclose a comparable figure or it was zero/invalid."
+        verdict = "L'entreprise n'a pas communiqué de chiffre comparable, ou il était nul/invalide."
     elif ratio >= 0.85:
-        verdict = "Platform estimate is broadly consistent with the company's claim."
+        verdict = "Notre estimation est globalement cohérente avec ce qu'annonce l'entreprise."
     elif ratio >= 0.5:
-        verdict = "Platform estimate is meaningfully lower than the company's claim - review market definition."
+        verdict = "Notre estimation est sensiblement inférieure à ce qu'annonce l'entreprise - à vérifier sur la définition du marché."
     else:
-        verdict = "Platform estimate is substantially lower than the company's claim - market definition is likely overstated."
+        verdict = "Notre estimation est nettement inférieure à ce qu'annonce l'entreprise - la définition du marché est probablement surestimée."
 
     return {
         "company_value_eur": company_value_eur,

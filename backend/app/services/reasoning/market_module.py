@@ -95,10 +95,10 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
     }
     if not company.sector:
         # No sector on record and the deck didn't make it inferable either - don't guess a market.
-        trace.add("identify_unknowns", ["Company sector is unknown - cannot ground a TAM/SAM/SOM search in the right industry."])
+        trace.add("identify_unknowns", ["Le secteur de l'entreprise n'est pas connu - impossible d'ancrer une recherche TAM/SAM/SOM sur la bonne industrie."])
         upsert_module_result(
             db, company, MODULE, status=ModuleStatus.insufficient_evidence,
-            headline="We can't independently size this market yet - the company's sector/industry isn't known. Set it on the company workspace and re-upload.",
+            headline="Impossible d'estimer la taille du marché pour l'instant - le secteur de l'entreprise n'est pas connu. Renseigne-le sur la fiche de l'entreprise puis réimporte le deck.",
             deck_value=str(deck_value) if deck_value else None, platform_value=None, discrepancy_explanation=None,
             trace=trace, llm_mode=llm.mode,
         )
@@ -175,7 +175,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         headline = (
             f"TAM {_fmt(tam.get('estimate_low'), symbol)}–{_fmt(tam.get('estimate_high'), symbol)} · "
             f"SAM {_fmt(sam.get('estimate'), symbol)} · "
-            f"SOM {_fmt(som.get('estimate_low'), symbol)}–{_fmt(som.get('estimate_high'), symbol)} (top-down)"
+            f"SOM {_fmt(som.get('estimate_low'), symbol)}–{_fmt(som.get('estimate_high'), symbol)}"
         )
         platform_value = json.dumps(structured)
         status = ModuleStatus.complete
@@ -185,14 +185,14 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
     if structured and deck_value:
         sam_val = (structured.get("sam") or {}).get("estimate")
         if structured["currency"] == "EUR" and sam_val:
-            discrepancy_note = f"Deck claims {deck_value:,.0f} EUR; our independent SAM estimate is €{sam_val:,.0f}."
+            discrepancy_note = f"Le deck annonce {deck_value:,.0f} EUR ; notre estimation SAM indépendante est de {sam_val:,.0f} EUR."
         else:
             discrepancy_note = (
-                f"Deck claims {deck_value:,.0f} EUR; our independent estimate above is in {structured['currency']} - "
-                "compare directionally rather than exactly, since the currencies differ."
+                f"Le deck annonce {deck_value:,.0f} EUR ; notre estimation indépendante ci-dessus est en {structured['currency']} - "
+                "à comparer de façon directionnelle plutôt qu'exacte, les devises étant différentes."
             )
     elif structured and not deck_value:
-        discrepancy_note = "The deck did not provide its own market-size figure to compare against."
+        discrepancy_note = "Le deck ne donne pas sa propre estimation de la taille de marché pour comparaison."
     trace.add("reality_check", {"deck_value_eur": deck_value, "note": discrepancy_note})
 
     if structured and deck_value and structured["currency"] == "EUR":
@@ -201,10 +201,10 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             add_red_flag(
                 db, company_id=company.id, module=MODULE, category="market",
                 severity=RedFlagSeverity.major,
-                explanation=f"Deck's market size ({deck_value:,.0f} EUR) is more than double our independent SAM estimate (€{sam_val:,.0f}).",
+                explanation=f"La taille de marché du deck ({deck_value:,.0f} EUR) fait plus du double de notre estimation SAM indépendante ({sam_val:,.0f} EUR).",
                 evidence_id=None,
-                potential_impact="If the addressable market is smaller than claimed, growth assumptions and valuation may need to be revisited.",
-                resolving_information="Ask management for their exact market-sizing methodology and primary sources.",
+                potential_impact="Si le marché adressable est plus petit qu'annoncé, les hypothèses de croissance et la valorisation pourraient devoir être revues.",
+                resolving_information="Demander au management leur méthodologie exacte de dimensionnement du marché et leurs sources primaires.",
             )
 
     upsert_module_result(
@@ -272,16 +272,16 @@ def recalculate(
     if comparison:
         trace.add("reality_check", comparison)
 
-    headline = f"Analyst override: {estimate.value_eur:,.0f} EUR ({methodology.replace('_', '-')})"
+    headline = f"Recalcul analyste : {estimate.value_eur:,.0f} EUR ({methodology.replace('_', '-')})"
     if comparison:
-        headline += f". Deck claims {deck_value:,.0f} EUR - {comparison['verdict']}"
+        headline += f". Le deck annonce {deck_value:,.0f} EUR - {comparison['verdict']}"
         if comparison["ratio_platform_over_company"] is not None and comparison["ratio_platform_over_company"] < 0.5:
             add_red_flag(
                 db, company_id=company.id, module=MODULE, category="market",
                 severity=RedFlagSeverity.major,
-                explanation=f"Analyst-confirmed independent TAM ({estimate.value_eur:,.0f}) is less than half the deck's claim ({deck_value:,.0f}).",
+                explanation=f"Le TAM indépendant confirmé par l'analyste ({estimate.value_eur:,.0f}) fait moins de la moitié de ce qu'annonce le deck ({deck_value:,.0f}).",
                 evidence_id=calc_ev.id,
-                potential_impact="Market may be materially smaller than the investment case assumes.",
+                potential_impact="Le marché pourrait être sensiblement plus petit que ce que suppose le dossier d'investissement.",
             )
 
     upsert_module_result(

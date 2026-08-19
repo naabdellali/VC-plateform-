@@ -94,7 +94,12 @@ class LlmClient:
         )
         if self.mode == "mock":
             return self._mock_extract_claims(deck_text)
-        return self._call_json(system, deck_text[:15000])
+        # Dense decks (tables, revenue by quarter, competitor lists, team, traction,
+        # market sizing all present) can produce a long claims array - the default
+        # 2000-token cap was silently truncating the JSON mid-array on those decks,
+        # which read as "the platform extracted nothing" for whatever category
+        # happened to be extracted last. Give it real headroom.
+        return self._call_json(system, deck_text[:60000], max_tokens=4000)
 
     def _mock_extract_claims(self, deck_text: str) -> LlmResult:
         # Deterministic, regex-based stand-in so the pipeline is exercisable
@@ -141,7 +146,7 @@ class LlmClient:
         )
         if self.mode == "mock":
             return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"sector": None, "confidence": "unverified"})
-        return self._call_json(system, deck_text[:8000])
+        return self._call_json(system, deck_text[:60000])
 
     # ------------------------------------------------------------------
     # 1c. Technology architecture / third-party dependency extraction (VC
@@ -155,27 +160,39 @@ class LlmClient:
     # ------------------------------------------------------------------
     def identify_tech_dependencies(self, deck_text: str) -> LlmResult:
         system = (
-            "Read this pitch deck's raw text and identify its technology architecture. Write everything in "
-            "French, in short, simple, human sentences - not academic, not a list of jargon fragments. "
-            "First, write one or two plain sentences summarizing what their technology actually is and what "
-            "they own/built (a normal person should understand it immediately, no jargon-only fragments like "
-            "'GPS, geolocation, critical data'). "
-            "Then list every named third-party dependency the deck mentions or clearly implies the product "
+            "Read this pitch deck's raw text and identify its technology architecture, for an analyst who will "
+            "read this as THREE separate, clearly distinct blocks in this exact order: (1) what the tech IS, "
+            "(2) dependencies/risk, (3) a maturity grade. Write everything in French, in short, simple, human "
+            "sentences - not academic, not a list of jargon fragments. "
+            "(1) Write one or two plain sentences summarizing what their technology actually is and what they "
+            "own/built (a normal person should understand it immediately - no jargon-only fragments like 'GPS, "
+            "geolocation, critical data'). Separately, list what's proprietary/built in-house as short KEYWORDS "
+            "or short phrases (2-4 words each, e.g. 'moteur de scoring propriétaire', 'modèle de pricing "
+            "interne') - not full sentences, these render as compact tags. "
+            "(2) List every named third-party dependency the deck mentions or clearly implies the product "
             "relies on (APIs, cloud providers, foundation models/LLMs, payment providers, data providers, "
-            "hardware suppliers, infrastructure providers). For each, write a short PLAIN SENTENCE (not a "
-            "fragment) explaining what it's used for, and judge whether it appears CRITICAL - i.e. the "
-            "product could not function as described without it - based only on how the deck frames it. "
-            "Separately, list short plain sentences describing what the deck claims is proprietary/built "
-            "in-house. Never invent a dependency that isn't stated or clearly implied in the text. "
+            "hardware suppliers, infrastructure providers). For each, give its name as a short keyword/label, "
+            "then ONE short plain sentence stating the concrete risk if that dependency became unavailable or "
+            "raised its price - not a description of what it does, the RISK it represents. Judge whether it's "
+            "CRITICAL (the product could not function as described without it) based only on how the deck "
+            "frames it. Never invent a dependency that isn't stated or clearly implied in the text. "
+            "(3) Only if you have enough information to judge (do not guess from a thin deck), grade the "
+            "overall technical maturity as 'Avancé' (real technical depth, hard to replicate quickly), "
+            "'Intermédiaire' (solid but replicable with effort), or 'Basique' (thin technical layer, mostly "
+            "off-the-shelf/no-code) - use null if there isn't enough to judge, don't force a grade. "
             'Return JSON: {"tech_summary": "1-2 simple French sentences on what their tech is/does", '
-            '"dependencies": [{"name": "...", "role": "a full simple French sentence - what it powers and why", '
-            '"critical": true|false, "evidence_text": "verbatim short snippet from the deck"}], '
-            '"proprietary": ["short simple French sentence", ...]}. '
-            "If the deck says nothing about technology/architecture, return empty lists and null tech_summary."
+            '"dependencies": [{"name": "short keyword/label", "risk_note": "one short French sentence on the '
+            'concrete risk", "critical": true|false, "evidence_text": "verbatim short snippet from the deck"}], '
+            '"proprietary": ["short keyword/phrase", ...], '
+            '"tech_grade": "Avancé"|"Intermédiaire"|"Basique"|null, "tech_grade_reason": "1 short sentence" or null}. '
+            "If the deck says nothing about technology/architecture, return empty lists, null tech_summary, null tech_grade."
         )
         if self.mode == "mock":
-            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"tech_summary": None, "dependencies": [], "proprietary": []})
-        return self._call_json(system, deck_text[:12000])
+            return LlmResult(
+                mode="mock", text=MOCK_DISCLAIMER,
+                parsed={"tech_summary": None, "dependencies": [], "proprietary": [], "tech_grade": None, "tech_grade_reason": None},
+            )
+        return self._call_json(system, deck_text[:60000], max_tokens=1200)
 
     # ------------------------------------------------------------------
     # 1d. Short industry display tag (e.g. "Insuretech") - a compact label
@@ -215,7 +232,7 @@ class LlmClient:
         )
         if self.mode == "mock":
             return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"description": None})
-        return self._call_json(system, deck_text[:10000], max_tokens=300)
+        return self._call_json(system, deck_text[:60000], max_tokens=300)
 
     # ------------------------------------------------------------------
     # 1f. Business model mechanics - pricing unit + target customer segment,
@@ -240,7 +257,43 @@ class LlmClient:
         )
         if self.mode == "mock":
             return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"pricing_model": None, "target_segment": None})
-        return self._call_json(system, deck_text[:10000], max_tokens=200)
+        return self._call_json(system, deck_text[:60000], max_tokens=200)
+
+    # ------------------------------------------------------------------
+    # 1f-bis. Business model tile "detail on click": an expanded, plain-French
+    #     explanation of how the revenue mechanic actually plays out for the
+    #     company's own customers. Deliberately GENERALIZED - reasons from the
+    #     deck's own pricing unit and segment rather than inventing a named,
+    #     hardcoded illustrative customer (the analyst was explicit that a
+    #     couple of hardcoded example names read as fabricated, not that she
+    #     wanted a template with different names swapped in). If the deck
+    #     gives real per-unit numbers, walk through the arithmetic with those
+    #     real numbers; otherwise stay qualitative - never invent a number.
+    # ------------------------------------------------------------------
+    def explain_business_model(self, deck_text: str, pricing_model: str | None, target_segment: str | None) -> LlmResult:
+        system = (
+            "You are a VC analyst explaining a company's revenue mechanic to a colleague, in French, short "
+            "simple sentences, no jargon-stacking, no markdown. You are given the pricing unit and target "
+            "segment already extracted from the deck (may be null), plus the deck's raw text. "
+            "Write a short explanation (3-5 sentences) of HOW the revenue mechanic actually works in practice "
+            "for this company's customers - e.g. what a customer pays for, what drives the price up or down "
+            "(seats, usage volume, transaction size...), and why that pricing unit makes sense given the "
+            "target segment. Reason in GENERAL terms tied to the deck's own pricing logic - do NOT invent a "
+            "named example customer or company ('a company like X would pay...'); describe the mechanic itself. "
+            "If, and only if, the deck states real per-unit numbers (a price, a seat count, a take rate...), "
+            "you may walk through that real arithmetic explicitly - never invent or round a number that isn't "
+            "in the deck. If the deck doesn't give enough to explain the mechanic beyond the pricing "
+            "unit/segment already extracted, say so plainly instead of padding. "
+            'Return JSON: {"explanation": "..." or null}'
+        )
+        if self.mode == "mock":
+            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"explanation": None})
+        user = (
+            f"Pricing unit extracted: {pricing_model or 'non précisé'}\n"
+            f"Target segment extracted: {target_segment or 'non précisé'}\n\n"
+            f"Deck text:\n{deck_text[:60000]}"
+        )
+        return self._call_json(system, user, max_tokens=400)
 
     # ------------------------------------------------------------------
     # 1g. Founder/officer names + titles as literally stated in the deck.
@@ -261,7 +314,7 @@ class LlmClient:
         )
         if self.mode == "mock":
             return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"founders": []})
-        return self._call_json(system, deck_text[:10000], max_tokens=400)
+        return self._call_json(system, deck_text[:60000], max_tokens=400)
 
     # ------------------------------------------------------------------
     # 1h. Red flags, connected into one flowing paragraph for the memo.
@@ -305,11 +358,18 @@ class LlmClient:
     # 3. Research synthesis (spec section 42-43: produces an evidence-ready payload)
     # ------------------------------------------------------------------
     def synthesize_research(self, question: str, sources: list[dict]) -> LlmResult:
+        # This "answer" string gets embedded directly into red-flag explanations and
+        # evidence claims across several modules (traction, founders, competition) -
+        # it was previously left English-default, which is the main source of the
+        # French/English mixing the analyst kept flagging. Write it in French, always.
         system = (
             "You synthesize web research results into a sourced answer for a VC investor. "
             "You may ONLY use the provided sources - never your own background knowledge for "
             "factual/numeric claims. If sources conflict, surface the conflict, do not silently pick one. "
             "If the sources do not answer the question, say so explicitly. "
+            "Write the 'answer' field in French, in short, simple, human sentences - the way you'd explain "
+            "it out loud to a colleague, not an academic paper. Never mix English words into the French "
+            "sentence except a proper noun/product name. "
             'Return JSON: {"answer": "...", "confidence": "high"|"medium"|"low"|"unverified", '
             '"citations": [source indices used, 0-based], "conflicting": true|false, '
             '"conflict_note": "..." or null}'
@@ -320,7 +380,7 @@ class LlmClient:
                 mode="mock",
                 text=MOCK_DISCLAIMER,
                 parsed={
-                    "answer": "Unable to independently verify - no live research provider configured.",
+                    "answer": "Impossible de vérifier indépendamment - aucun fournisseur de recherche en direct n'est configuré.",
                     "confidence": "unverified",
                     "citations": [],
                     "conflicting": False,
@@ -383,49 +443,69 @@ class LlmClient:
     #      named player must come from a source; empty cells are left
     #      explicitly empty rather than filled with a guess.
     # ------------------------------------------------------------------
-    def build_competitive_landscape(self, company_context: dict, sources: list[dict]) -> LlmResult:
+    def build_competitive_landscape(self, company_context: dict, sources: list[dict], deck_text: str | None = None) -> LlmResult:
+        company_name = company_context.get("company_name") or "l'entreprise"
         system = (
-            "You are a VC analyst mapping the competitive landscape for a startup, using ONLY the provided "
-            "sources. Write everything in French. Write the way you'd explain it out loud to a colleague, "
-            "not an academic paper: short sentences, plain corporate vocabulary, one idea per sentence. Never "
-            "mix English words into French sentences except a proper noun/product name. "
-            "First, in one or two simple sentences, say what market the company operates in and, if it "
-            "clearly serves more than one segment/sub-market, name them. "
+            f"You are a senior VC analyst writing the competitive-landscape section of a memo for another VC, "
+            f"using ONLY the provided sources (plus the company's own pitch-deck text, given separately, for "
+            f"describing what THEY do). The reader is an investment professional - do not explain basic VC "
+            f"concepts, do not write like an encyclopedia entry, get straight to the sharp, specific point a "
+            f"sharp analyst would make. Always call the company by its actual name, "
+            f"'{company_name}' - never 'the company', 'the startup', or 'l'entreprise'. Write everything in "
+            "French, in short, direct, expert-to-expert sentences. Never mix English words into French "
+            "sentences except a proper noun/product name/standard VC term (e.g. keep 'moat' as-is). "
+            f"First, in one or two sharp sentences, say what market {company_name} operates in and, if it "
+            "clearly serves more than one segment/sub-market, name them - written the way one analyst briefs "
+            "another, not a Wikipedia summary. "
             "Then break the value chain into 3-5 functions/capabilities relevant to this category (e.g. for "
             "an AI tooling company: governance, observability, guardrails, gateway, usage billing - adapt to "
             "the actual category). For each function, list which named players cover it in each of THREE "
             "separate geography buckets: 'France', 'Europe' (rest of Europe, excluding France), and "
-            "'États-Unis'. Do not merge France into the Europe bucket. Only name a player in a cell if a "
-            "source explicitly places them there; otherwise write 'Quasi absent' or '—' rather than guessing. "
+            "'États-Unis'. Do not merge France into the Europe bucket - never write 'France/Europe' as a "
+            "single bucket anywhere. Only name a player in a cell if a source explicitly places them there; "
+            "if genuinely no player was found for a function in a given geography, write 'Aucun acteur "
+            "identifié' rather than leaving it ambiguous. "
             "Then identify the single closest comparable company (same country/region as the target if "
             "possible), state its key facts (funding, notable clients) ONLY if sourced, and write one simple, "
-            "clear sentence on what differentiates the target and one on the main competitive risk - both may "
-            "be analytical judgment, but label them as such, not as sourced fact. "
+            "clear sentence on the main competitive risk - analytical judgment, but label it as such, not as "
+            "sourced fact. "
             "Then classify the competitive intensity as a one-word snapshot label a VC would use in a deck "
             "review: 'blue_ocean' (few/no direct competitors, category still open), 'red_ocean' (many direct "
             "competitors, intense head-to-head competition), or 'blood_red_ocean' (saturated, commoditized, "
             "price-competitive). Base this only on the density/intensity you observe in the sources, and give "
-            "one short, plain-French justification sentence. "
+            "2-3 sentences of justification (not just one) - enough for the reasoning to actually stand on its "
+            "own, still short simple French sentences, no padding. "
             "Then research whether there has been any recent M&A / acquisition / consolidation activity in "
             "this sector (a competitor acquired, an incumbent buying into the space, notable exits) - only if "
             "a source mentions it; if none is mentioned, say so plainly rather than guessing. "
             "Finally, grade the startup's moat (defensibility / barrier to entry) using ONLY the standard "
             "three-tier convention: 'No Moat', 'Narrow Moat' (some real but erodable advantage), or 'Wide "
-            "Moat' (a durable, hard-to-replicate advantage). Then, instead of one dense paragraph, give this "
+            "Moat' (a durable, hard-to-replicate advantage). The question you're really answering: is this "
+            f"business model easily copied, and if a large, well-capitalized incumbent in {company_name}'s "
+            "sector decided to enter tomorrow, could they sweep the market? Reason across THREE distinct "
+            "moat dimensions before writing your points: (1) data/tech moat - does the product generate or "
+            "aggregate PROPRIETARY data that compounds over time (e.g. aggregating data across many "
+            "counterparties that no single competitor sees), described in the deck text; this is often the "
+            "most overlooked real moat, look for it specifically; (2) team moat - is there a specific, hard-"
+            "to-replicate expertise or domain knowledge (e.g. know-how that trains/improves their own "
+            "product) described in the deck or sources; (3) competitive-replicability moat - could a "
+            "competent team rebuild the visible product quickly with today's AI tooling, or has/could a "
+            "large incumbent already build this internally. Then, instead of one dense paragraph, give this "
             "as short, distinct bullet-style points a human can scan in seconds: 2-3 short 'strengths' points "
-            "(what genuinely helps their defensibility today), 2-3 short 'gaps' points (what's missing or "
-            "fragile), and 1-2 short 'what_would_widen_it' points (concretely what would need to become true "
-            "for the moat grade to improve). Each point is ONE short simple sentence, citing a footnote marker "
-            "[n] where it rests on a sourced fact, otherwise labelled as analyst judgment implicitly by not "
-            "having a footnote. "
-            'Return ONLY JSON: {"market_intro": "1-2 simple French sentences on the market/segments", '
+            "(what genuinely helps their defensibility today, drawing on the three dimensions above), 2-3 "
+            "short 'gaps' points (what's missing or fragile), and 1-2 short 'what_would_widen_it' points "
+            "(concretely what would need to become true for the moat grade to improve). Each point is ONE "
+            "short, punchy, qualitative sentence that shows real analytical depth - do NOT restate a precise "
+            "number/euro figure inline inside these short points (that reads as copy-pasted, not reasoned); "
+            "cite a footnote marker [n] instead when the point rests on a sourced fact. "
+            'Return ONLY JSON: {"market_intro": "1-2 sharp French sentences on the market/segments", '
             '"functions": ["..."], "geographies": ["France", "Europe", "États-Unis"], '
-            '"matrix": [{"function": "...", "cells": {"France": "names or Quasi absent", '
-            '"Europe": "names or Quasi absent", "États-Unis": "names or Quasi absent"}}], '
+            '"matrix": [{"function": "...", "cells": {"France": "names or Aucun acteur identifié", '
+            '"Europe": "names or Aucun acteur identifié", "États-Unis": "names or Aucun acteur identifié"}}], '
             '"closest_comparable": {"name": "...", "description": "1-2 simple sentences, sourced facts only", '
             '"source_index": 0 or null}, '
-            '"differentiator": "1 simple sentence, analyst judgment", "risk": "1 simple sentence, analyst judgment", '
-            '"ocean": {"type": "blue_ocean"|"red_ocean"|"blood_red_ocean", "reasoning": "1 simple sentence"}, '
+            '"risk": "1 simple sentence, analyst judgment", '
+            '"ocean": {"type": "blue_ocean"|"red_ocean"|"blood_red_ocean", "reasoning": "2-3 simple sentences"}, '
             '"consolidation": "1-2 simple sentences on sector M&A/consolidation, or a plain statement that none was found", '
             '"moat": {"grade": "No Moat"|"Narrow Moat"|"Wide Moat", "strengths": ["short sentence", ...], '
             '"gaps": ["short sentence", ...], "what_would_widen_it": ["short sentence", ...]}, '
@@ -433,13 +513,18 @@ class LlmClient:
             "If the sources are too thin to build any of this, return "
             '{"insufficient": true, "reason": "..."}.'
         )
-        user = f"Company context: {json.dumps(company_context)}\n\nSources:\n" + json.dumps(sources, indent=2)[:14000]
+        user = (
+            f"Company context: {json.dumps(company_context)}\n\n"
+            f"Company's own pitch deck text (for describing what they do/own - NOT a competitor source):\n"
+            f"{(deck_text or '')[:20000]}\n\n"
+            "Web-search sources on the market/competitors:\n" + json.dumps(sources, indent=2)[:14000]
+        )
         if self.mode == "mock":
             return LlmResult(
                 mode="mock", text=MOCK_DISCLAIMER,
                 parsed={"insufficient": True, "reason": "No live research/LLM provider configured - mock mode."},
             )
-        return self._call_json(system, user, max_tokens=3000)
+        return self._call_json(system, user, max_tokens=3500)
 
     # ------------------------------------------------------------------
     # 3b. Structured competitor identification - used to render an actual
@@ -472,6 +557,42 @@ class LlmClient:
         if self.mode == "mock":
             return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"competitors": [], "confidence": "unverified"})
         return self._call_json(system, user)
+
+    # ------------------------------------------------------------------
+    # 3b. Market Dynamics: is this sector growing/consolidating, and is there
+    #     active M&A activity - a distinct question from TAM/SAM/SOM (size)
+    #     and from the Competitive Landscape (who), grounded ONLY in the
+    #     provided web-search sources plus the deck's own market-context text.
+    #     A standalone module per analyst feedback, not a buried paragraph
+    #     inside Competition.
+    # ------------------------------------------------------------------
+    def identify_market_dynamics(self, sector: str, hq_country: str | None, sources: list[dict], deck_text: str | None = None) -> LlmResult:
+        system = (
+            "You are a VC analyst assessing sector-level market dynamics, using ONLY the provided "
+            "web-search sources (plus the deck's own market-context text, for company-claim-origin "
+            "context only) - never your own background knowledge for a factual/numeric claim, and "
+            "never invent a statistic, deal, or acquirer name that isn't in a source. Write every "
+            "field in French, short simple sentences, no jargon-stacking, no academic tone. "
+            'Return JSON: {'
+            '"trend": "growing"|"stable"|"declining"|null (only if a source clearly supports it), '
+            '"trend_reasoning": "1-2 sentences grounded in the sources" or null, '
+            '"consolidation": "1-3 sentences on M&A / consolidation activity in the sector - name real, '
+            'sourced deals/acquirers if the sources give them, otherwise say explicitly that no '
+            'consolidation activity was found" or null, '
+            '"key_drivers": ["short keyword or phrase", ...] (what is driving growth/decline - regulation, '
+            'technology shift, funding climate... - empty list if the sources don\'t support any), '
+            '"footnotes": [{"n": 1, "detail": "...", "source_index": 0}], '
+            '"insufficient": true|false (true if the sources say nothing useful about sector dynamics)'
+            '}'
+        )
+        if self.mode == "mock":
+            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"insufficient": True})
+        user = (
+            f"Sector: {sector}\nHQ country: {hq_country or 'non précisé'}\n\n"
+            f"Deck market-context text (for context only, not a source to cite):\n{(deck_text or '')[:8000]}\n\n"
+            f"Web-search sources:\n" + json.dumps(sources, indent=2)[:12000]
+        )
+        return self._call_json(system, user, max_tokens=900)
 
     # ------------------------------------------------------------------
     # 4. Contradiction detection (spec section 46)

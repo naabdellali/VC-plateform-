@@ -69,7 +69,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             claim="Legal/registry background check", value=None,
             origin=EvidenceOrigin.unknown if False else EvidenceOrigin.external_source,
             source_tier=SourceTier.not_applicable, confidence=Confidence.unverified,
-            source_name="Pappers.fr", methodology="Unable to independently verify - PAPPERS_API_KEY not configured.",
+            source_name="Pappers.fr", methodology="Impossible de vérifier indépendamment - PAPPERS_API_KEY non configurée.",
         )
         pappers_evidence_ids.append(ev.id)
     elif not record.found:
@@ -113,10 +113,10 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             add_red_flag(
                 db, company_id=company.id, module=MODULE, category="team",
                 severity=RedFlagSeverity.critical,
-                explanation=f"{len(record.procedures_collectives)} insolvency/collective proceeding(s) found on the legal entity's record.",
+                explanation=f"{len(record.procedures_collectives)} procédure(s) collective(s)/insolvabilité trouvée(s) sur le registre de l'entité légale.",
                 evidence_id=fev.id,
-                potential_impact="May indicate prior financial distress relevant to founder track record or the entity itself.",
-                resolving_information="Review the specific proceedings and ask management directly about context and resolution.",
+                potential_impact="Peut indiquer des difficultés financières passées, liées au parcours des fondateurs ou à l'entité elle-même.",
+                resolving_information="Examiner les procédures en question et demander directement au management le contexte et leur résolution.",
             )
     trace.add("research", {"pappers_mode": record.mode, "found": record.found}, pappers_evidence_ids)
 
@@ -157,10 +157,10 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             add_red_flag(
                 db, company_id=company.id, module=MODULE, category="team",
                 severity=RedFlagSeverity.major,
-                explanation=f"Public sources appear to contradict the claim: '{c.get('claim')}'.",
+                explanation=f"Des sources publiques semblent contredire cette affirmation : « {c.get('claim')} ».",
                 evidence_id=vev.id,
-                potential_impact="Founder credibility / founder-market fit claims may be overstated.",
-                resolving_information="Ask the founder directly to clarify and provide documentation.",
+                potential_impact="La crédibilité du fondateur ou l'adéquation fondateur-marché pourrait être surestimée.",
+                resolving_information="Demander directement au fondateur de clarifier et de fournir des justificatifs.",
             )
     trace.add("verify", classifications, verification_evidence_ids)
 

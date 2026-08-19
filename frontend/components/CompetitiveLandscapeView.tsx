@@ -1,3 +1,4 @@
+import { useState } from "react";
 import FootnoteList, { withFootnoteLinks, Footnote } from "@/components/Footnotes";
 
 const OCEAN_LABEL: Record<string, string> = {
@@ -5,10 +6,10 @@ const OCEAN_LABEL: Record<string, string> = {
   red_ocean: "Red Ocean",
   blood_red_ocean: "Blood Red Ocean",
 };
-const OCEAN_ICON: Record<string, string> = {
-  blue_ocean: "🔵",
-  red_ocean: "🔴",
-  blood_red_ocean: "🩸",
+const OCEAN_DOT_CLASS: Record<string, string> = {
+  blue_ocean: "blue",
+  red_ocean: "",
+  blood_red_ocean: "dark",
 };
 
 export type Ocean = { type: string; label: string; reasoning: string | null };
@@ -29,7 +30,6 @@ export type CompetitiveLandscape = {
   matrix: { function: string; cells: Record<string, string> }[];
   competitors: LandscapeCompetitor[];
   closest_comparable: { name: string; description: string; source_url: string | null; source_name: string | null } | null;
-  differentiator: string | null;
   risk: string | null;
   ocean: Ocean | null;
   consolidation: string | null;
@@ -37,7 +37,24 @@ export type CompetitiveLandscape = {
 };
 
 function isEmptyCell(v: string | undefined) {
-  return !v || /quasi absent|—|^-$/i.test(v);
+  return !v || /quasi absent|aucun acteur identifié|—|^-$/i.test(v);
+}
+
+// Public brand logo via the competitor's own domain - never fabricated, only
+// rendered when `domain` was itself extracted from a source (see identify_competitors
+// in llm_client.py). Hides itself silently if the logo can't be found.
+function CompetitorLogo({ domain }: { domain: string | null }) {
+  const [failed, setFailed] = useState(false);
+  if (!domain || failed) return null;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={`https://logo.clearbit.com/${domain}`}
+      alt=""
+      className="competitor-logo"
+      onError={() => setFailed(true)}
+    />
+  );
 }
 
 export default function CompetitiveLandscapeView({
@@ -60,9 +77,10 @@ export default function CompetitiveLandscapeView({
     ) : (
       <div className="landscape-hero">
         <span className={`ocean-badge large ocean-${data.ocean.type}`}>
-          {OCEAN_ICON[data.ocean.type] || "●"} {data.ocean.label || OCEAN_LABEL[data.ocean.type]}
+          <span className={`ocean-dot ${OCEAN_DOT_CLASS[data.ocean.type] || ""}`} />
+          {data.ocean.label || OCEAN_LABEL[data.ocean.type]}
         </span>
-        {data.ocean.reasoning && <span style={{ fontSize: 12, color: "var(--text-dim)", maxWidth: 440 }}>{data.ocean.reasoning}</span>}
+        {data.ocean.reasoning && <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-dim)", maxWidth: 640 }}>{data.ocean.reasoning}</span>}
         {data.closest_comparable && (
           <span className="comparable-sub">
             Comparable le plus proche : <b>{data.closest_comparable.name}</b>
@@ -74,15 +92,15 @@ export default function CompetitiveLandscapeView({
 
   const functionGroups = data.matrix.length > 0 && (
     <div className="function-group-list">
-      {data.matrix.map((row) => (
+      {data.matrix.map((row, i) => (
         <div key={row.function} className="function-group">
-          <div className="function-name">{row.function}</div>
+          <div className="function-name">{isDoc ? `${i + 1}. ` : ""}{row.function}</div>
           <div className="geo-row">
             {data.geographies.map((g) => (
               <div key={g} className="geo-col">
                 <div className="geo-label">{g}</div>
                 {isEmptyCell(row.cells[g]) ? (
-                  <span className="player-chip empty">Quasi absent</span>
+                  <span className="player-chip empty">Aucun acteur identifié</span>
                 ) : (
                   row.cells[g].split(/,\s*/).map((name, i) => (
                     <span key={i} className="player-chip">{name}</span>
@@ -98,15 +116,19 @@ export default function CompetitiveLandscapeView({
 
   const direct = data.competitors.filter((c) => c.competitor_type !== "indirect");
   const indirect = data.competitors.filter((c) => c.competitor_type === "indirect");
+  const isFrance = (c: LandscapeCompetitor) => (c.country || "").toLowerCase().includes("france");
+  const noDirectInFrance = direct.length > 0 && !direct.some(isFrance) && data.geographies.some((g) => g.toLowerCase() === "france");
   const competitorCols = data.competitors.length > 0 && (
     <div className="competitor-type-cols">
       {direct.length > 0 && (
         <div className="competitor-type-col">
           <div className="type-heading">Concurrents directs</div>
+          {noDirectInFrance && <div className="competitor-type-row-empty">Aucun concurrent direct identifié en France.</div>}
           {direct.map((c, i) => (
             <div key={i} className="competitor-type-row">
+              <CompetitorLogo domain={c.domain} />
               <span className="name">{c.name}</span>
-              <span className="meta">{[c.size, c.country].filter(Boolean).join(" · ")}</span>
+              <span className="meta">{[c.size, c.country || "Pays non précisé"].filter(Boolean).join(" · ")}</span>
             </div>
           ))}
         </div>
@@ -116,8 +138,9 @@ export default function CompetitiveLandscapeView({
           <div className="type-heading">Concurrents indirects</div>
           {indirect.map((c, i) => (
             <div key={i} className="competitor-type-row">
+              <CompetitorLogo domain={c.domain} />
               <span className="name">{c.name}</span>
-              <span className="meta">{[c.size, c.country].filter(Boolean).join(" · ")}</span>
+              <span className="meta">{[c.size, c.country || "Pays non précisé"].filter(Boolean).join(" · ")}</span>
             </div>
           ))}
         </div>
@@ -139,9 +162,6 @@ export default function CompetitiveLandscapeView({
             </>
           )}
         </p>
-      )}
-      {data.differentiator && (
-        <p style={{ margin: "6px 0", fontSize: isDoc ? undefined : 13.5, lineHeight: 1.6 }}>{withFootnoteLinks(data.differentiator, footnotePrefix)}</p>
       )}
       {data.risk && (
         <p style={{ margin: "6px 0", fontSize: isDoc ? undefined : 13.5, lineHeight: 1.6 }}>{withFootnoteLinks(data.risk, footnotePrefix)}</p>

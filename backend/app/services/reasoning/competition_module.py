@@ -65,7 +65,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             deck_value=None, platform_value=None, discrepancy_explanation=None, trace=trace, llm_mode=llm.mode,
         )
         return
-    landscape_q = f"Who are the direct and indirect competitors in {company.sector}, including incumbents and adjacent solutions, by function and by region (France/Europe vs United States)?"
+    landscape_q = f"Who are the direct and indirect competitors in {company.sector}, including incumbents and adjacent solutions, by function and by region - keep France, the rest of Europe, and the United States as three distinct regions, never merged?"
     q1 = llm.generate_search_queries(landscape_q, {"sector": company.sector, "hq_country": company.hq_country})
     queries = (q1.parsed or {}).get("queries", [landscape_q]) if q1.parsed else [landscape_q]
 
@@ -80,7 +80,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
     landscape_ev = add_evidence(
         db, company_id=company.id, module=MODULE,
         claim="Independently researched competitive landscape",
-        value=landscape_payload.get("answer", "Unable to independently verify."),
+        value=landscape_payload.get("answer", "Impossible de vérifier indépendamment."),
         origin=EvidenceOrigin.platform_inference,
         source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
         confidence={"high": Confidence.high, "medium": Confidence.medium, "low": Confidence.low}.get(
@@ -137,7 +137,10 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
     platform_value = None
     moat_platform_value = None
     if landscape_sources:
-        matrix_result = llm.build_competitive_landscape({"sector": company.sector, "hq_country": company.hq_country}, landscape_sources)
+        matrix_result = llm.build_competitive_landscape(
+            {"sector": company.sector, "hq_country": company.hq_country, "company_name": company.name},
+            landscape_sources, deck_text=deck.raw_text if deck else None,
+        )
         matrix_payload = matrix_result.parsed or {"insufficient": True}
         if not matrix_payload.get("insufficient"):
             footnotes = []
@@ -167,7 +170,6 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
                     "name": comparable.get("name"), "description": comparable.get("description"),
                     "source_url": comp_src["url"] if comp_src else None, "source_name": comp_src["title"] if comp_src else None,
                 } if comparable.get("name") else None,
-                "differentiator": matrix_payload.get("differentiator"),
                 "risk": matrix_payload.get("risk"),
                 "ocean": ocean_struct,
                 "consolidation": matrix_payload.get("consolidation"),

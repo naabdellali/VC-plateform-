@@ -42,6 +42,10 @@ export default function MemoPage() {
 
   let sectionNumber = 0;
 
+  function titleCase(s: string): string {
+    return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
   return (
     <div className="container">
       <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", maxWidth: 860, margin: "0 auto 18px" }}>
@@ -70,9 +74,12 @@ export default function MemoPage() {
         <div className="doc-page">
           <div className="doc-header">
             <h1>{company?.name || "…"} — Investment Memo</h1>
-            <div className="doc-tags">
-              {(memo.sections_json || []).map((s) => s.title).join(" · ")}
-            </div>
+            {company && (
+              <div className="header-chips" style={{ marginTop: 8 }}>
+                <span className="header-chip">{company.industry_tag || company.sector || "Secteur n/a"}</span>
+                <span className="header-chip">{titleCase(company.stage)}</span>
+              </div>
+            )}
           </div>
           <hr className="doc-rule" />
 
@@ -94,7 +101,7 @@ export default function MemoPage() {
                   <div className="continue-block">
                     <span className={`continue-label rec-${s.data?.value}`}>{s.data?.label}</span>
                   </div>
-                  {s.body && <p style={{ fontSize: 13.5, lineHeight: 1.65, margin: 0 }}>{s.body}</p>}
+                  {s.body && <p className="doc-body-text">{s.body}</p>}
                 </div>
               );
             }
@@ -117,7 +124,7 @@ export default function MemoPage() {
             return (
               <div key={i} className="doc-section">
                 <div className="doc-section-title">{sectionNumber}. {s.title}</div>
-                <p style={{ whiteSpace: "pre-wrap", fontSize: 13.5, lineHeight: 1.65, margin: 0 }}>{s.body}</p>
+                <p className="doc-body-text" style={{ whiteSpace: "pre-wrap" }}>{s.body}</p>
               </div>
             );
           })}
@@ -125,7 +132,7 @@ export default function MemoPage() {
           {memo.key_questions_json && memo.key_questions_json.length > 0 && (
             <div className="doc-section">
               <div className="doc-section-title">{sectionNumber + 1}. Questions pour les fondateurs</div>
-              <ul style={{ fontSize: 13.5, lineHeight: 1.7, paddingLeft: 20, margin: 0 }}>
+              <ul className="doc-body-text" style={{ paddingLeft: 20, margin: 0 }}>
                 {memo.key_questions_json.map((q, i) => (
                   <li key={i}>{q}</li>
                 ))}

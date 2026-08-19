@@ -88,18 +88,18 @@ def mrr_quality_check(mrr_series: list[float], cv_flag_threshold: float = 0.15, 
     flags = []
     if cv > cv_flag_threshold:
         flags.append(
-            f"High month-to-month volatility (CV={cv:.2f} > {cv_flag_threshold}) - "
-            "inconsistent with steady recurring revenue; investigate whether "
-            "one-off services/project revenue is included in the reported MRR."
+            f"Forte volatilité mois par mois (CV={cv:.2f} > {cv_flag_threshold}) - "
+            "incohérent avec un revenu récurrent stable ; à vérifier si du revenu "
+            "de services/projets ponctuel est inclus dans le MRR déclaré."
         )
     if decline_ratio > decline_ratio_flag_threshold:
         flags.append(
-            f"{declines}/{total_transitions} months show a decline in MRR - "
-            "a 'growing MRR' narrative should not show this much backsliding "
-            "if the revenue base is truly recurring and sticky."
+            f"{declines}/{total_transitions} mois montrent une baisse du MRR - "
+            "un discours de 'MRR en croissance' ne devrait pas montrer autant de reculs "
+            "si la base de revenu est vraiment récurrente et fidèle."
         )
     if not flags:
-        flags.append("No volatility red flag detected from the reported series alone.")
+        flags.append("Aucun red flag de volatilité détecté sur la série déclarée seule.")
 
     return MrrQualityReport(
         coefficient_of_variation=cv,
@@ -130,10 +130,10 @@ def cac_ltv_consistency_check(cac: float, reported_ltv: float, gross_margin: flo
         "ltv_to_cac_ratio": round(ratio, 2) if ratio is not None else None,
         "plausible": plausible,
         "explanation": (
-            f"For the reported LTV of {reported_ltv:,.0f} to hold given ARPA of "
-            f"{arpa_monthly:,.0f}/mo and {gross_margin:.0%} gross margin, monthly "
-            f"churn would need to be {implied_monthly_churn:.2%} "
-            f"({implied_annual_churn:.1%} annualized)."
-            + ("" if plausible else " This is not a plausible retention rate - the reported LTV is likely inflated or inconsistent with the reported churn/ARPA.")
+            f"Pour que le LTV déclaré de {reported_ltv:,.0f} tienne avec un ARPA de "
+            f"{arpa_monthly:,.0f}/mois et une marge brute de {gross_margin:.0%}, le churn "
+            f"mensuel devrait être de {implied_monthly_churn:.2%} "
+            f"({implied_annual_churn:.1%} en annualisé)."
+            + ("" if plausible else " Ce n'est pas un taux de rétention plausible - le LTV déclaré est probablement gonflé ou incohérent avec le churn/ARPA déclarés.")
         ),
     }

@@ -34,13 +34,13 @@ def test_compare_estimates_flags_overstated_claim():
     platform_est = tam_top_down(10_000_000_000, 0.1, 0.3)  # = 300,000,000
     result = compare_estimates(company_value_eur=8_000_000_000, platform_estimate=platform_est)
     assert result["ratio_platform_over_company"] < 0.5
-    assert "overstated" in result["verdict"]
+    assert "surestimée" in result["verdict"]
 
 
 def test_compare_estimates_flags_consistent_claim():
     platform_est = tam_bottom_up(100_000, 1_000)  # = 100,000,000
     result = compare_estimates(company_value_eur=105_000_000, platform_estimate=platform_est)
-    assert "consistent" in result["verdict"]
+    assert "cohérente" in result["verdict"]
 
 
 def test_cagr_matches_known_value():

@@ -44,22 +44,24 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
 
     # --- 1. extract: architecture + third-party dependencies, from the deck only ---
     tech_result = llm.identify_tech_dependencies(deck.raw_text or "")
-    tech_payload = tech_result.parsed or {"tech_summary": None, "dependencies": [], "proprietary": []}
+    tech_payload = tech_result.parsed or {"tech_summary": None, "dependencies": [], "proprietary": [], "tech_grade": None, "tech_grade_reason": None}
     tech_summary = tech_payload.get("tech_summary")
     dependencies = [d for d in (tech_payload.get("dependencies") or []) if d.get("name")]
     proprietary = [p for p in (tech_payload.get("proprietary") or []) if p]
+    tech_grade = tech_payload.get("tech_grade")
+    tech_grade_reason = tech_payload.get("tech_grade_reason")
 
     dep_evidence_ids = []
     for d in dependencies:
         ev = add_evidence(
             db, company_id=company.id, module=MODULE,
-            claim=f"Technology dependency: {d.get('name')}", value=d.get("role"),
+            claim=f"Dépendance technologique : {d.get('name')}", value=d.get("risk_note"),
             origin=EvidenceOrigin.company_claim, source_tier=SourceTier.deck,
             confidence=Confidence.medium, source_name=f"Pitch deck ({deck.filename})",
             supporting_excerpt=d.get("evidence_text"),
         )
         dep_evidence_ids.append(ev.id)
-    trace.add("extract", {"dependencies": dependencies, "proprietary": proprietary}, dep_evidence_ids)
+    trace.add("extract", {"dependencies": dependencies, "proprietary": proprietary, "tech_grade": tech_grade}, dep_evidence_ids)
 
     if not dependencies and not proprietary:
         upsert_module_result(
@@ -91,7 +93,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             payload = synth.parsed or {}
             ev = add_evidence(
                 db, company_id=company.id, module=MODULE,
-                claim=q, value=payload.get("answer", "Unable to independently verify."),
+                claim=q, value=payload.get("answer", "Impossible de vérifier indépendamment."),
                 origin=EvidenceOrigin.platform_inference,
                 source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
                 confidence={"high": Confidence.high, "medium": Confidence.medium, "low": Confidence.low}.get(
@@ -151,6 +153,8 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         "tech_summary": tech_summary,
         "dependencies": dependencies,
         "proprietary": proprietary,
+        "tech_grade": tech_grade,
+        "tech_grade_reason": tech_grade_reason,
         "cross_module_signals": activations,
         "questions_to_ask": founder_questions,
         "hypothesis": hypothesis_struct,

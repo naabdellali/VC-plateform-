@@ -1,8 +1,10 @@
 /**
- * Shared footnote rendering: inline [n] markers link down to a list of
- * distinct, scannable "pop-up" rows (bordered card per source, not a
- * paragraph of running text) - used by TamSamSomView, CompetitiveLandscapeView
- * and MoatView so every footnoted section reads the same way.
+ * Shared footnote rendering: inline [n] markers link down to a small, quiet
+ * list of sources - used by TamSamSomView, CompetitiveLandscapeView and
+ * MoatView so every footnoted section reads the same way. Deliberately NOT
+ * a stack of bordered/shadowed chips - the analyst found that treatment too
+ * loud, competing with the actual content for attention, on both the
+ * dashboard (card variant) and the memo (document variant) alike.
  */
 export type Footnote = { n: number; detail: string; source_url: string | null; source_name: string | null };
 
@@ -32,40 +34,20 @@ export default function FootnoteList({
 }) {
   if (!footnotes || footnotes.length === 0) return null;
 
-  // Document variant (the printable memo): real footnotes should be small and quiet, not a
-  // stack of bordered chips - the chip/pop-up style is for the module pages only.
-  if (variant === "document") {
-    return (
-      <div className="doc-footnotes">
-        {footnotes.map((fn) => (
-          <div key={fn.n} id={`fn-${prefix}-${fn.n}`}>
-            <sup>{fn.n}</sup>{fn.detail}
-            {fn.source_url && (
-              <>
-                {" — "}
-                <a href={fn.source_url} target="_blank" rel="noreferrer">{fn.source_name || fn.source_url}</a>
-              </>
-            )}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
+  // Card and document variants now share the same small, quiet footnote style -
+  // only a hairline-vs-dashed top rule tells them apart, matching the module
+  // page vs. the printable memo respectively.
   return (
-    <div className="footnote-list">
+    <div className={variant === "document" ? "doc-footnotes" : "doc-footnotes doc-footnotes-card"}>
       {footnotes.map((fn) => (
-        <div key={fn.n} id={`fn-${prefix}-${fn.n}`} className="footnote-item">
-          <span className="footnote-badge">{fn.n}</span>
-          <span>
-            {fn.detail}
-            {fn.source_url && (
-              <>
-                {" — "}
-                <a href={fn.source_url} target="_blank" rel="noreferrer">{fn.source_name || fn.source_url}</a>
-              </>
-            )}
-          </span>
+        <div key={fn.n} id={`fn-${prefix}-${fn.n}`}>
+          <sup>{fn.n}</sup>{fn.detail}
+          {fn.source_url && (
+            <>
+              {" — "}
+              <a href={fn.source_url} target="_blank" rel="noreferrer">{fn.source_name || fn.source_url}</a>
+            </>
+          )}
         </div>
       ))}
     </div>

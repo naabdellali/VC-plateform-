@@ -24,9 +24,11 @@ def test_critical_dependency_fires_trigger_research_redflag_and_hypothesis(db_se
             mode="mock", text="stub",
             parsed={
                 "dependencies": [
-                    {"name": "OpenAI API", "role": "powers the AI assistant's core NLP", "critical": True, "evidence_text": "We use OpenAI's API to power our assistant."}
+                    {"name": "OpenAI API", "risk_note": "Dépendance critique à l'API d'OpenAI pour le NLP du produit.", "critical": True, "evidence_text": "We use OpenAI's API to power our assistant."}
                 ],
                 "proprietary": ["proprietary onboarding flow"],
+                "tech_grade": "Intermédiaire",
+                "tech_grade_reason": "Le coeur technique repose sur une API tierce, pas de modèle propriétaire identifié.",
             },
         ),
     )

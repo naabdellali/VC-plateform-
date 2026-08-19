@@ -47,12 +47,13 @@ def run_auto(db: Session, company: Company, deck: Deck | None = None) -> None:
         claim="Business model (as entered on the company workspace)", value=label,
         origin=EvidenceOrigin.company_claim, source_tier=SourceTier.not_applicable,
         confidence=Confidence.medium,
-        methodology="Workspace form field, set by the analyst - not independently researched or verified.",
+        methodology="Champ du formulaire de workspace, renseigné par l'analyste - non recherché ni vérifié indépendamment.",
     )
     trace.add("extract", {"business_model": label}, [ev.id])
 
     pricing_model = None
     target_segment = None
+    explanation = None
     llm_mode = "n/a"
 
     if deck is not None and deck.raw_text:
@@ -84,15 +85,41 @@ def run_auto(db: Session, company: Company, deck: Deck | None = None) -> None:
         if detail_evidence_ids:
             trace.add("extract_details", {"pricing_model": pricing_model, "target_segment": target_segment}, detail_evidence_ids)
 
+        # Expanded, generalized "detail on click" - how the mechanic actually
+        # plays out for this company's customers, reasoned from the deck's
+        # own pricing logic rather than a hardcoded illustrative example.
+        if pricing_model or target_segment:
+            explain_result = llm.explain_business_model(deck.raw_text, pricing_model, target_segment)
+            explanation = (explain_result.parsed or {}).get("explanation")
+            if explanation:
+                exp_ev = add_evidence(
+                    db, company_id=company.id, module=MODULE,
+                    claim="Explication de la mécanique de revenu", value=explanation,
+                    origin=EvidenceOrigin.platform_inference,
+                    source_tier=SourceTier.llm_inference if explain_result.mode == "live" else SourceTier.not_applicable,
+                    confidence=Confidence.low,
+                    methodology="Raisonnement LLM à partir de la mécanique de pricing extraite du deck - généralisé, pas d'exemple client inventé.",
+                )
+                trace.add("explain_mechanics", {"explanation": explanation}, [exp_ev.id])
+
+    # Headline shows the pricing mechanic + segment directly when known - "SaaS"
+    # alone tells an analyst almost nothing at a glance.
+    detail_parts = [p for p in (pricing_model, target_segment) if p]
+    if detail_parts:
+        headline = f"{label} — {', '.join(detail_parts)}."
+    else:
+        headline = f"Business model : {label}."
+
     platform_value = json.dumps({
         "label": label,
         "pricing_model": pricing_model,
         "target_segment": target_segment,
+        "explanation": explanation,
     })
 
     upsert_module_result(
         db, company, MODULE, status=ModuleStatus.complete,
-        headline=f"Business model : {label}.",
+        headline=headline,
         deck_value=None, platform_value=platform_value, discrepancy_explanation=None,
         trace=trace, llm_mode=llm_mode,
     )

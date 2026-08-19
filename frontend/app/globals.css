@@ -100,6 +100,17 @@ a:hover { text-decoration: underline; }
 }
 .hero-label { font-size: 11.5px; color: var(--accent-strong); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; margin-bottom: 8px; }
 .hero-value { font-size: 26px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.3; }
+
+/* --- TAM/SAM/SOM: one line per tier, label + number, everything bold and
+   big so it's the first thing read on opening the module ---------------- */
+.tamsamsom-list { display: flex; flex-direction: column; gap: 4px; }
+.tamsamsom-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 14px 2px; border-bottom: 1px dashed var(--panel-border);
+}
+.tamsamsom-row:last-child { border-bottom: none; }
+.tamsamsom-label { font-size: 16px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; }
+.tamsamsom-value { font-size: 28px; font-weight: 800; letter-spacing: -0.01em; color: var(--text); }
 .hero-note { font-size: 13.5px; font-weight: 600; color: var(--text-dim); margin-top: 10px; line-height: 1.55; }
 .hero-empty { font-size: 14px; color: var(--text-dim); line-height: 1.6; }
 .hero-secondary {
@@ -114,6 +125,12 @@ a:hover { text-decoration: underline; }
 .business-model-block { display: flex; flex-direction: column; gap: 16px; }
 .bm-fact-label { font-size: 11.5px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
 .bm-fact-value { font-size: 22px; font-weight: 700; line-height: 1.3; letter-spacing: -0.01em; }
+.bm-explanation {
+  cursor: pointer; border: 1px dashed var(--panel-border); border-radius: 10px; padding: 10px 14px; margin-top: 2px;
+}
+.bm-explanation.expanded { border-style: solid; background: #fbfcfe; }
+.bm-explanation-toggle { font-size: 12px; font-weight: 700; color: var(--accent-strong); }
+.bm-explanation-text { font-size: 13px; line-height: 1.6; color: var(--text); margin-top: 8px; }
 
 /* --- Team & Background: names shown up front, background-check status
    click-to-expand below each one -------------------------------------- */
@@ -144,6 +161,14 @@ a:hover { text-decoration: underline; }
 .traction-item:last-child { border-bottom: none; }
 .traction-item.projection { color: var(--accent-strong); }
 .traction-item-empty { font-size: 13px; color: var(--text-dim); font-weight: 600; }
+
+/* --- "Questions à poser" - standard rubric on every module, not just Tech - */
+.questions-to-ask { margin-top: 20px; border-top: 1px dashed var(--panel-border); padding-top: 14px; }
+.questions-to-ask-heading { font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent-strong); margin-bottom: 10px; }
+.questions-group { margin-bottom: 10px; }
+.questions-group:last-child { margin-bottom: 0; }
+.questions-group-label { font-size: 11px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 4px; }
+.questions-to-ask ul { margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.7; }
 
 /* --- Empty state ------------------------------------------------------- */
 .empty-state {
@@ -224,38 +249,50 @@ details.collapsible .collapsible-body { padding: 4px 20px 18px; }
 .redflag-card .redflag-meta { font-size: 11.5px; font-weight: 600; color: var(--text-dim); line-height: 1.5; }
 .redflag-card .redflag-meta b { color: var(--text); font-weight: 600; }
 
-/* --- Footnotes as scannable pop-up chips (not a wall of text) ------------- */
-.footnote-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
-.footnote-item {
-  display: flex; align-items: flex-start; gap: 9px;
-  border: 1px solid var(--panel-border); border-radius: 10px;
-  background: #fbfcfe; padding: 8px 12px; font-size: 11.5px; color: var(--text-dim);
-  line-height: 1.5; box-shadow: var(--shadow-sm);
-}
-.footnote-item .footnote-badge {
-  flex-shrink: 0; width: 18px; height: 18px; border-radius: 999px; margin-top: 1px;
-  background: var(--accent-dim); color: var(--accent-strong); font-weight: 800; font-size: 10px;
-  display: flex; align-items: center; justify-content: center;
-}
-.footnote-item a { font-weight: 600; }
 
-/* --- Moat grade badge ------------------------------------------------------ */
-.moat-badge {
-  display: inline-flex; align-items: center; gap: 8px; padding: 6px 16px; border-radius: 999px;
+/* --- Moat grade badge / Ocean snapshot badge - a single pastel-cream pill
+   style shared by both (per the analyst's reference vignettes), text color
+   carries the meaning rather than the background --------------------------- */
+.moat-badge, .ocean-badge {
+  display: inline-flex; align-items: center; gap: 8px; padding: 8px 20px; border-radius: 999px;
   font-size: 15px; font-weight: 800; letter-spacing: -0.01em;
+  background: #f5ece0;
 }
-.moat-badge.grade-no { background: color-mix(in srgb, var(--sev-critical) 14%, white); color: var(--sev-critical); }
-.moat-badge.grade-narrow { background: color-mix(in srgb, var(--conf-medium) 14%, white); color: var(--conf-medium); }
-.moat-badge.grade-wide { background: color-mix(in srgb, var(--status-complete) 14%, white); color: var(--status-complete); }
+.moat-badge.grade-no { color: var(--sev-critical); }
+.moat-badge.grade-narrow { color: #b7791f; }
+.moat-badge.grade-wide { color: var(--status-complete); }
 
-/* --- Ocean snapshot badge (Competitive Landscape) -------------------------- */
-.ocean-badge {
-  display: inline-flex; align-items: center; gap: 8px; padding: 6px 16px; border-radius: 999px;
-  font-size: 15px; font-weight: 800; letter-spacing: -0.01em;
+.ocean-badge.ocean-blue_ocean { color: #3b6fc4; }
+.ocean-badge.ocean-red_ocean { color: #c0561f; }
+.ocean-badge.ocean-blood_red_ocean { color: var(--sev-critical); }
+.ocean-dot {
+  display: inline-block; width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+  background: radial-gradient(circle at 35% 30%, #ff8a65, #c0392b 70%);
 }
-.ocean-badge.ocean-blue_ocean { background: color-mix(in srgb, #3b6fc4 14%, white); color: #3b6fc4; }
-.ocean-badge.ocean-red_ocean { background: color-mix(in srgb, var(--sev-major) 14%, white); color: var(--sev-major); }
-.ocean-badge.ocean-blood_red_ocean { background: color-mix(in srgb, var(--sev-critical) 14%, white); color: var(--sev-critical); }
+.ocean-dot.blue { background: radial-gradient(circle at 35% 30%, #7ea6e0, #2f5aa8 70%); }
+.ocean-dot.dark { background: radial-gradient(circle at 35% 30%, #8b1e1e, #4a0e0e 70%); }
+
+/* --- Market Dynamics: trend badge, same pastel-pill family as Moat/Ocean --- */
+.trend-badge {
+  display: inline-flex; align-items: center; gap: 8px; padding: 8px 20px; border-radius: 999px;
+  font-size: 15px; font-weight: 800; letter-spacing: -0.01em; background: #f5ece0; margin-right: 12px;
+}
+.trend-badge .trend-arrow { font-size: 16px; }
+.trend-badge.trend-up { color: var(--status-complete); }
+.trend-badge.trend-flat { color: #b7791f; }
+.trend-badge.trend-down { color: var(--sev-critical); }
+
+/* --- Technology module: 3 distinct blocks (what it is / dependencies / hypothesis) - */
+.tech-block { margin-bottom: 18px; padding-bottom: 18px; border-bottom: 1px dashed var(--panel-border); }
+.tech-block:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+.tech-block-lead { font-size: 14.5px; font-weight: 700; line-height: 1.6; margin: 0 0 10px; }
+.tech-block-heading { font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent-strong); margin-bottom: 10px; }
+.tech-grade-reason { font-size: 12.5px; font-weight: 600; color: var(--text-dim); margin: 6px 0 10px; line-height: 1.55; }
+.keyword-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.keyword-tag {
+  font-size: 12px; font-weight: 700; padding: 5px 12px; border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 12%, white); color: var(--accent-strong);
+}
 
 /* --- Technology module: dependency chips, hypothesis sub-conditions ------- */
 .tech-dep-list { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 4px; }
@@ -269,7 +306,6 @@ details.collapsible .collapsible-body { padding: 4px 20px 18px; }
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; font-weight: 700;
   padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--sev-major) 14%, white); color: var(--sev-major);
 }
-.hypothesis-block { border-top: 1px dashed var(--panel-border); margin-top: 16px; padding-top: 14px; }
 .hypothesis-claim { font-size: 13.5px; font-weight: 700; margin-bottom: 10px; line-height: 1.5; }
 .subcondition-row { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; border-bottom: 1px solid #f0f1f6; font-size: 12.5px; }
 .subcondition-row:last-child { border-bottom: none; }
@@ -305,12 +341,14 @@ details.collapsible .collapsible-body { padding: 4px 20px 18px; }
 .competitor-type-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin: 10px 0 18px; }
 .competitor-type-col .type-heading { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700; color: var(--text-dim); margin-bottom: 8px; }
 .competitor-type-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  display: flex; align-items: center; gap: 8px;
   padding: 7px 0; border-bottom: 1px solid #f0f1f6; font-size: 12.5px;
 }
 .competitor-type-row:last-child { border-bottom: none; }
-.competitor-type-row .name { font-weight: 600; }
-.competitor-type-row .meta { color: var(--text-dim); font-size: 11px; font-weight: 600; }
+.competitor-type-row .name { font-weight: 600; flex: 1; }
+.competitor-type-row .meta { color: var(--text-dim); font-size: 11px; font-weight: 600; flex-shrink: 0; }
+.competitor-logo { width: 18px; height: 18px; border-radius: 4px; object-fit: contain; flex-shrink: 0; }
+.competitor-type-row-empty { font-size: 12px; font-weight: 600; color: var(--text-dim); padding: 6px 0; }
 
 .comparable-line { font-size: 13.5px; line-height: 1.65; margin: 4px 0 14px; }
 
@@ -348,6 +386,14 @@ details.collapsible .collapsible-body { padding: 4px 20px 18px; }
 }
 .redflag-card.expanded .redflag-detail { max-height: 400px; opacity: 1; margin-top: 8px; }
 .redflag-card { cursor: pointer; }
+
+/* --- Red flags grouped by category (tray page) ------------------------------ */
+.redflag-group { margin-top: 20px; }
+.redflag-group:first-child { margin-top: 8px; }
+.redflag-group-heading {
+  font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-dim); margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--panel-border);
+}
 
 /* --- Company header chips (tray page) -------------------------------------- */
 .header-chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
@@ -396,12 +442,14 @@ label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 
 }
 .doc-header { margin-bottom: 8px; }
 .doc-header h1 { font-size: 25px; font-weight: 800; margin: 0; letter-spacing: -0.01em; }
-.doc-header .doc-tags { font-size: 12.5px; font-style: italic; color: var(--text-dim); margin-top: 4px; }
 .doc-rule { height: 2px; background: var(--accent); border: none; margin: 14px 0 28px; }
 .doc-section { margin-bottom: 30px; }
 .doc-section-title { font-size: 16.5px; font-weight: 800; margin: 0 0 12px; }
 .doc-italic { font-size: 12.5px; font-style: italic; color: var(--text-dim); margin: 10px 0 16px; }
 .doc-subhead { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 3px; }
+/* Single shared size/line-height for every body paragraph in the memo document -
+   previously duplicated as inline styles in several places, which is how they drift. */
+.doc-body-text { font-size: 13.5px; line-height: 1.65; margin: 0; }
 .doc-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 6px; }
 .doc-table th {
   background: var(--accent); color: #ffffff; text-align: left; font-weight: 700;
@@ -413,6 +461,7 @@ label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 
 .doc-footnotes { border-top: 1px solid #e4e7f0; margin-top: 14px; padding-top: 8px; }
 .doc-footnotes div { font-size: 10.5px; color: var(--text-dim); line-height: 1.6; margin-bottom: 2px; }
 .doc-footnotes sup { font-weight: 700; margin-right: 3px; }
+.doc-footnotes-card { border-top: 1px dashed var(--panel-border); margin-top: 16px; }
 .doc-toolbar { display: flex; justify-content: flex-end; gap: 10px; max-width: 860px; margin: 0 auto 14px; }
 
 @media print {
@@ -420,5 +469,4 @@ label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 
   .no-print { display: none !important; }
   body { background: white; }
   .panel, .hero { box-shadow: none; border: 1px solid #ddd; }
-  .footnote-item { box-shadow: none; }
 }

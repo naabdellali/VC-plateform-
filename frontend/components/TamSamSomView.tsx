@@ -92,18 +92,11 @@ export default function TamSamSomView({ data, variant = "card", footnotePrefix =
 
   return (
     <div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginBottom: 4 }}>
+      <div className="tamsamsom-list">
         {rows.map((r) => (
-          <div
-            key={r.level}
-            style={{
-              border: "1px solid var(--panel-border)", borderTop: `4px solid ${TIER_COLOR[r.level]}`,
-              borderRadius: 14, padding: "20px 20px 18px", background: "#fbfcfe",
-            }}
-          >
-            <div style={{ fontSize: 13, fontWeight: 800, color: TIER_COLOR[r.level], textTransform: "uppercase", letterSpacing: "0.06em" }}>{r.level}</div>
-            <div style={{ fontSize: 12, color: "var(--text-dim)", margin: "4px 0 10px" }}>{r.def}</div>
-            <div style={{ fontSize: 28, fontWeight: 800, color: "var(--text)", letterSpacing: "-0.01em" }}>{rangeStr(r.tier, symbol)}</div>
+          <div key={r.level} className="tamsamsom-row">
+            <span className="tamsamsom-label" style={{ color: TIER_COLOR[r.level] }}>{r.level}</span>
+            <span className="tamsamsom-value">{rangeStr(r.tier, symbol)}</span>
           </div>
         ))}
       </div>
