@@ -9,6 +9,7 @@ production customers.
 """
 from __future__ import annotations
 
+import json
 import re
 
 from sqlalchemy.orm import Session
@@ -35,9 +36,15 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
     trace = ReasoningTrace()
 
     # --- 1. extract ----------------------------------------------------
-    traction_claims = [c for c in (deck.extracted_claims_json or []) if c.get("category") == "traction_metric"]
+    # The deck usually tells two different stories: traction achieved so far
+    # ("aujourd'hui") and where the company projects it will be ("demain").
+    # Conflating them made the tile misleading, so they're kept as two lists.
+    all_claims = deck.extracted_claims_json or []
+    traction_claims = [c for c in all_claims if c.get("category") == "traction_metric"]
+    projection_claims = [c for c in all_claims if c.get("category") == "traction_projection"]
     deck_value = None
     evidence_ids = []
+    today_struct = []
     for c in traction_claims:
         parsed = parse_money(c.get("value") or c.get("claim", ""))
         if parsed and deck_value is None:
@@ -50,7 +57,22 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             supporting_excerpt=c.get("claim"),
         )
         evidence_ids.append(ev.id)
-    trace.add("extract", {"claims_found": len(traction_claims), "deck_value_eur": deck_value}, evidence_ids)
+        today_struct.append({"claim": c.get("claim"), "value": c.get("value")})
+
+    tomorrow_struct = []
+    for c in projection_claims:
+        ev = add_evidence(
+            db, company_id=company.id, module=MODULE,
+            claim=c.get("claim", "Traction projection claim"), value=c.get("value"),
+            origin=EvidenceOrigin.company_claim, source_tier=SourceTier.deck,
+            confidence=Confidence.low,
+            methodology="Projection stated by the company - forward-looking, not yet achieved, not independently verifiable.",
+            source_name=f"Pitch deck ({deck.filename})", supporting_excerpt=c.get("claim"),
+        )
+        evidence_ids.append(ev.id)
+        tomorrow_struct.append({"claim": c.get("claim"), "value": c.get("value")})
+
+    trace.add("extract", {"claims_found": len(traction_claims), "projections_found": len(projection_claims), "deck_value_eur": deck_value}, evidence_ids)
 
     # --- 2. identify_unknowns -------------------------------------------
     unknowns = [
@@ -109,9 +131,13 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         f"Traction : {deck_value:,.0f} EUR MRR/ARR déclaré (non vérifié)."
         if deck_value else "Traction : en attente de données."
     )
+    platform_value = (
+        json.dumps({"today": today_struct, "tomorrow": tomorrow_struct})
+        if today_struct or tomorrow_struct else None
+    )
     upsert_module_result(
         db, company, MODULE, status=status, headline=headline,
-        deck_value=str(deck_value) if deck_value else None, platform_value=None,
+        deck_value=str(deck_value) if deck_value else None, platform_value=platform_value,
         discrepancy_explanation=None, trace=trace, llm_mode=llm.mode,
     )
 

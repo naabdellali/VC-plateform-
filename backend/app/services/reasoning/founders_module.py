@@ -10,6 +10,8 @@ upgraded to "verified" just because the deck says so.
 """
 from __future__ import annotations
 
+import json
+
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -44,6 +46,19 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         )
         claim_evidence_ids.append(ev.id)
     trace.add("extract", {"claims_found": len(team_claims)}, claim_evidence_ids)
+
+    # --- 1b. Names/titles as literally stated in the deck -----------------
+    # Shown up front even before any verification runs, so the tile reads
+    # "CEO Jane Doe" instead of "en attente de données" - the background
+    # check status is a separate, honestly-labelled layer below each name.
+    founders_struct: list[dict] = []
+    if deck.raw_text:
+        founders_result = llm.identify_founders(deck.raw_text)
+        for f in (founders_result.parsed or {}).get("founders", []):
+            name = (f.get("name") or "").strip()
+            if not name:
+                continue
+            founders_struct.append({"name": name, "title": f.get("title")})
 
     # --- 2. Pappers.fr legal/registry check (Tier 1 for French entities) --
     record = pappers.search_company(company.legal_name or company.name)
@@ -149,7 +164,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             )
     trace.add("verify", classifications, verification_evidence_ids)
 
-    status = ModuleStatus.needs_review if team_claims or record.found else ModuleStatus.insufficient_evidence
+    status = ModuleStatus.needs_review if team_claims or record.found or founders_struct else ModuleStatus.insufficient_evidence
     n_contradicted = sum(1 for c in classifications if c["classification"] == "contradicted")
     # Transparent, single-glance signal for the tray tile - the officer list and per-claim
     # verification detail still live in the reasoning trace below it.
@@ -159,11 +174,35 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             if n_contradicted
             else f"✓ {len(record.dirigeants) if record.found else 0} officer(s) vérifié(s) via Pappers.fr."
         )
+    elif founders_struct:
+        headline = f"Équipe : {len(founders_struct)} personne(s) identifiée(s) dans le deck."
     else:
         headline = "Team : en attente de données."
 
+    # Attach a background-check status to each named founder. We only attribute
+    # a specific verification result to a person when their name literally
+    # appears in the claim text that was checked - anything else stays
+    # "non vérifié" rather than implying a per-person check that didn't happen.
+    for person in founders_struct:
+        matches = [c for c in classifications if person["name"].split()[-1].lower() in (c.get("claim") or "").lower()]
+        contradicted = [c for c in matches if c["classification"] == "contradicted"]
+        if contradicted:
+            person["status"] = "flag"
+            person["status_label"] = f"{len(contradicted)} red flag(s)"
+            person["detail"] = " · ".join(c.get("claim", "") for c in contradicted)
+        elif matches:
+            person["status"] = "positive"
+            person["status_label"] = "Background check : positif"
+            person["detail"] = None
+        else:
+            person["status"] = "unverified"
+            person["status_label"] = "Non vérifié indépendamment"
+            person["detail"] = None
+
+    platform_value = json.dumps({"founders": founders_struct}) if founders_struct else None
+
     upsert_module_result(
         db, company, MODULE, status=status, headline=headline,
-        deck_value=None, platform_value=None, discrepancy_explanation=None,
+        deck_value=None, platform_value=platform_value, discrepancy_explanation=None,
         trace=trace, llm_mode=llm.mode,
     )

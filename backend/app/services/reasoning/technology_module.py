@@ -44,7 +44,8 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
 
     # --- 1. extract: architecture + third-party dependencies, from the deck only ---
     tech_result = llm.identify_tech_dependencies(deck.raw_text or "")
-    tech_payload = tech_result.parsed or {"dependencies": [], "proprietary": []}
+    tech_payload = tech_result.parsed or {"tech_summary": None, "dependencies": [], "proprietary": []}
+    tech_summary = tech_payload.get("tech_summary")
     dependencies = [d for d in (tech_payload.get("dependencies") or []) if d.get("name")]
     proprietary = [p for p in (tech_payload.get("proprietary") or []) if p]
 
@@ -147,9 +148,11 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         headline = "Technologie majoritairement propriétaire déclarée, pas de dépendance tierce critique."
 
     platform_value = json.dumps({
+        "tech_summary": tech_summary,
         "dependencies": dependencies,
         "proprietary": proprietary,
         "cross_module_signals": activations,
+        "questions_to_ask": founder_questions,
         "hypothesis": hypothesis_struct,
     })
 

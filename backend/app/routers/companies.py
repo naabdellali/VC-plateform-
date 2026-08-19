@@ -10,7 +10,7 @@ from app.rules.stage_rules import get_stage_priorities
 router = APIRouter(prefix="/companies", tags=["companies"])
 
 TRAY_MODULES = [
-    ("market", "Market Analysis"),
+    ("market", "Market Sizing"),
     ("competition", "Competitive Landscape"),
     ("moat", "Moat"),
     ("technology", "Technology"),
@@ -47,6 +47,13 @@ def get_tray(company: Company = Depends(get_company_or_404), db: Session = Depen
         if f.module:
             flag_counts[f.module] = flag_counts.get(f.module, 0) + 1
 
+    # Modules with real, populated data are the point of the page; modules still
+    # "transparent" (no data yet / genuinely insufficient) shouldn't crowd them
+    # out. They sink to the end and naturally reorder back up the moment a new
+    # enrichment document gives them something real to say - no manual sorting
+    # required from the analyst.
+    _EMPTY_STATUSES = {"pending", "insufficient_evidence"}
+
     tiles = []
     for key, label in TRAY_MODULES:
         mr = results.get(key)
@@ -59,6 +66,8 @@ def get_tray(company: Company = Depends(get_company_or_404), db: Session = Depen
                 red_flag_count=flag_counts.get(key, 0),
             )
         )
+
+    tiles.sort(key=lambda t: 1 if t.status in _EMPTY_STATUSES else 0)
     return tiles
 
 

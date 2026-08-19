@@ -7,6 +7,7 @@ export type Company = {
   stage: string;
   business_model: string;
   sector: string | null;
+  industry_tag: string | null;
   hq_country: string | null;
   created_at: string | null;
 };

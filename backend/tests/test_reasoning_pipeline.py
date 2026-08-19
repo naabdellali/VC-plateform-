@@ -153,7 +153,7 @@ def test_memo_generation_assembles_all_modules_and_recommends_conservatively(db_
     # "don't optimize for positive conclusions."
     assert memo.recommendation.value != "invest"
     titles = [s["title"] for s in memo.sections_json]
-    assert "Taille de marché (TAM / SAM / SOM)" in titles and "Traction" in titles and "Red Flags" in titles and "Recommendation" in titles
+    assert "Taille de marché (TAM / SAM / SOM)" in titles and "Traction" in titles and "Red Flags" in titles and "Faut-il continuer ?" in titles
 
     saved = db_session.query(Memo).filter_by(company_id=sample_company.id).one()
     assert saved.id == memo.id

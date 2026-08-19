@@ -78,8 +78,6 @@ export default function TamSamSomView({ data, variant = "card", footnotePrefix =
           </tbody>
         </table>
 
-        <p className="doc-italic">Le raisonnement suit une logique Top Down.</p>
-
         {rows.map((r) => (
           <div key={r.level} style={{ marginBottom: 10 }}>
             <div className="doc-subhead" style={{ color: TIER_COLOR[r.level] }}>{r.level}</div>
@@ -87,7 +85,7 @@ export default function TamSamSomView({ data, variant = "card", footnotePrefix =
           </div>
         ))}
 
-        <FootnoteList footnotes={data.footnotes} prefix={footnotePrefix} />
+        <FootnoteList footnotes={data.footnotes} prefix={footnotePrefix} variant="document" />
       </div>
     );
   }
@@ -113,7 +111,7 @@ export default function TamSamSomView({ data, variant = "card", footnotePrefix =
       <details className="collapsible" style={{ marginTop: 16, boxShadow: "none" }} open>
         <summary>
           Calculation details
-          <span className="summary-sub">how we got these numbers — top-down, sourced</span>
+          <span className="summary-sub">how we got these numbers</span>
         </summary>
         <div className="collapsible-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {rows.map((r) => (

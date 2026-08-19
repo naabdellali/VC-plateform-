@@ -86,6 +86,7 @@ class CompanyOut(BaseModel):
     stage: str
     business_model: str
     sector: Optional[str] = None
+    industry_tag: Optional[str] = None
     hq_country: Optional[str] = None
     created_at: Optional[datetime] = None
 

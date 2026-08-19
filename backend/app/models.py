@@ -101,6 +101,10 @@ class Company(Base):
     stage = Column(Enum(Stage), default=Stage.unknown, nullable=False)
     business_model = Column(Enum(BusinessModel), default=BusinessModel.other, nullable=False)
     sector = Column(String, nullable=True)
+    # Short (1-3 word) display category, e.g. "Insuretech" - distinct from `sector`, which is a
+    # longer, precise phrase used to drive research queries. Never shown as a research finding,
+    # just a compact tray/header label.
+    industry_tag = Column(String, nullable=True)
     hq_country = Column(String, nullable=True)
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)

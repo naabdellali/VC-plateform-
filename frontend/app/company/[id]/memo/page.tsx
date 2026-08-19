@@ -8,20 +8,6 @@ import TamSamSomView from "@/components/TamSamSomView";
 import CompetitiveLandscapeView from "@/components/CompetitiveLandscapeView";
 import MoatView from "@/components/MoatView";
 
-const REC_LABEL: Record<string, string> = {
-  invest: "INVEST",
-  pass: "PASS",
-  watchlist: "WATCHLIST",
-  need_more_data: "NEED MORE DATA",
-};
-
-const REC_COLOR: Record<string, string> = {
-  invest: "var(--status-complete)",
-  pass: "var(--sev-critical)",
-  watchlist: "var(--sev-major)",
-  need_more_data: "var(--conf-medium)",
-};
-
 export default function MemoPage() {
   const params = useParams<{ id: string }>();
   const companyId = params.id;
@@ -90,16 +76,28 @@ export default function MemoPage() {
           </div>
           <hr className="doc-rule" />
 
-          {memo.recommendation && (
-            <div className="doc-section" style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-              <span style={{ fontSize: 11, textTransform: "uppercase", color: "var(--text-dim)", letterSpacing: "0.04em" }}>Recommandation</span>
-              <span style={{ fontSize: 18, fontWeight: 800, color: REC_COLOR[memo.recommendation] }}>
-                {REC_LABEL[memo.recommendation] || memo.recommendation.toUpperCase()}
-              </span>
-            </div>
-          )}
-
           {memo.sections_json?.map((s, i) => {
+            if (s.kind === "overview_tags") {
+              return (
+                <div key={i} className="doc-section overview-chips">
+                  {(s.data?.tags || []).map((tag: string, j: number) => (
+                    <span key={j} className="overview-chip">{tag}</span>
+                  ))}
+                </div>
+              );
+            }
+            if (s.kind === "recommendation") {
+              sectionNumber += 1;
+              return (
+                <div key={i} className="doc-section">
+                  <div className="doc-section-title">{sectionNumber}. {s.title}</div>
+                  <div className="continue-block">
+                    <span className={`continue-label rec-${s.data?.value}`}>{s.data?.label}</span>
+                  </div>
+                  {s.body && <p style={{ fontSize: 13.5, lineHeight: 1.65, margin: 0 }}>{s.body}</p>}
+                </div>
+              );
+            }
             if (s.kind === "tam_sam_som" || s.kind === "competitive_landscape" || s.kind === "moat") {
               sectionNumber += 1;
               return (

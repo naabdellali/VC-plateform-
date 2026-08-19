@@ -55,7 +55,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
     if not company.sector:
         upsert_module_result(
             db, company, MODULE, status=ModuleStatus.insufficient_evidence,
-            headline="We can't map the competitive landscape yet - the company's sector/industry isn't known.",
+            headline="Impossible de cartographier la concurrence pour l'instant - le secteur n'est pas connu.",
             deck_value=", ".join(list(deck_named)[:5]) if deck_named else None,
             platform_value=None, discrepancy_explanation=None, trace=trace, llm_mode=llm.mode,
         )
@@ -106,6 +106,9 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
                 "name": name,
                 "description": c.get("description") or "",
                 "domain": c.get("domain"),
+                "competitor_type": c.get("competitor_type") if c.get("competitor_type") in ("direct", "indirect") else None,
+                "country": c.get("country"),
+                "size": c.get("size"),
                 "source_url": src["url"] if src else None,
                 "source_name": src["title"] if src else None,
                 "in_deck": any(name.lower() in (dn or "").lower() or (dn or "").lower() in name.lower() for dn in deck_named),
@@ -155,9 +158,11 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
                 if ocean_type else None
             )
             landscape_struct = {
+                "market_intro": matrix_payload.get("market_intro"),
                 "functions": matrix_payload.get("functions") or [],
-                "geographies": matrix_payload.get("geographies") or ["France / Europe", "États-Unis"],
+                "geographies": matrix_payload.get("geographies") or ["France", "Europe", "États-Unis"],
                 "matrix": matrix_payload.get("matrix") or [],
+                "competitors": competitors_struct,
                 "closest_comparable": {
                     "name": comparable.get("name"), "description": comparable.get("description"),
                     "source_url": comp_src["url"] if comp_src else None, "source_name": comp_src["title"] if comp_src else None,
@@ -165,6 +170,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
                 "differentiator": matrix_payload.get("differentiator"),
                 "risk": matrix_payload.get("risk"),
                 "ocean": ocean_struct,
+                "consolidation": matrix_payload.get("consolidation"),
                 "footnotes": footnotes,
             }
             landscape_ev2 = add_evidence(
@@ -183,7 +189,9 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             if moat_payload.get("grade"):
                 moat_struct = {
                     "grade": moat_payload.get("grade"),
-                    "reasoning": moat_payload.get("reasoning") or "",
+                    "strengths": moat_payload.get("strengths") or [],
+                    "gaps": moat_payload.get("gaps") or [],
+                    "what_would_widen_it": moat_payload.get("what_would_widen_it") or [],
                     "footnotes": footnotes,
                 }
                 moat_ev = add_evidence(
@@ -227,26 +235,26 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         add_red_flag(
             db, company_id=company.id, module=MODULE, category="competition",
             severity=RedFlagSeverity.major,
-            explanation="Independent research suggests an incumbent has already engaged with this space: " + collision_payload["answer"][:300],
+            explanation="Un acteur déjà bien financé semble s'être positionné sur ce marché : " + collision_payload["answer"][:300],
             evidence_id=collision_ev.id,
-            potential_impact="Question whether the startup's moat is defensible if/when a better-capitalized player re-enters.",
-            resolving_information="Ask management directly why the incumbent's prior attempt (if confirmed) does not apply to this startup.",
+            potential_impact="Remet en question la défendabilité du moat si un acteur mieux capitalisé revient sur ce marché.",
+            resolving_information="Demander à l'équipe pourquoi cette tentative antérieure (si confirmée) ne s'applique pas à cette startup.",
         )
 
     # --- 4. contradiction: deck's competitor list vs independent findings -
     if landscape_payload.get("answer") and deck_named:
         contradiction_note = (
-            f"Deck names {len(deck_named)} competitor(s): {', '.join(list(deck_named)[:5])}. "
-            "Independent research may surface additional players not mentioned in the deck - review the full research answer in the evidence trail."
+            f"Le deck cite {len(deck_named)} concurrent(s) : {', '.join(list(deck_named)[:5])}. "
+            "La recherche indépendante peut faire apparaître d'autres acteurs non mentionnés dans le deck - voir le détail dans les preuves."
         )
         trace.add("contradictions", [contradiction_note])
     elif landscape_payload.get("answer") and not deck_named:
         add_red_flag(
             db, company_id=company.id, module=MODULE, category="competition",
             severity=RedFlagSeverity.watch,
-            explanation="Deck does not name any competitors, but independent research found relevant players in the space.",
+            explanation="Le deck ne cite aucun concurrent, alors que la recherche indépendante en a trouvé sur ce marché.",
             evidence_id=landscape_ev.id,
-            potential_impact="Omitting competitors may indicate an incomplete or overly favorable framing of the competitive landscape.",
+            potential_impact="Omettre les concurrents peut indiquer une présentation incomplète ou trop favorable du paysage concurrentiel.",
         )
 
     status = ModuleStatus.needs_review if (landscape_struct or competitors_struct or deck_named) else ModuleStatus.insufficient_evidence
@@ -267,9 +275,9 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         headline = f"{len(competitors_struct)} concurrent(s) identifié(s) indépendamment"
         headline += f", {not_in_deck} absent(s) du deck." if not_in_deck else "."
     elif deck_named:
-        headline = f"Deck names {len(deck_named)} competitor(s); independent research was inconclusive."
+        headline = f"Le deck cite {len(deck_named)} concurrent(s) ; la recherche indépendante n'a rien confirmé de plus."
     else:
-        headline = "No competitors named in the deck, and independent research was inconclusive."
+        headline = "Aucun concurrent cité dans le deck, et la recherche indépendante n'a rien trouvé de concluant."
 
     upsert_module_result(
         db, company, MODULE, status=status, headline=headline,

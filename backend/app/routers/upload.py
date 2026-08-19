@@ -58,6 +58,15 @@ async def upload_deck(
         if inferred_sector:
             company.sector = inferred_sector
 
+    # Short display tag for the header chip (e.g. "Insuretech") - separate from `sector`, which
+    # stays the longer, precise research-query phrase. Runs whether the sector came from the
+    # form or was just inferred, since the form field alone is never short enough for a chip.
+    if company.sector and not company.industry_tag:
+        tag_result = llm.categorize_industry_tag(company.sector)
+        tag = (tag_result.parsed or {}).get("tag")
+        if tag:
+            company.industry_tag = tag
+
     extraction = llm.extract_claims(parsed.raw_text)
     extracted_claims = extraction.parsed if isinstance(extraction.parsed, list) else []
 

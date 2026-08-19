@@ -69,18 +69,18 @@ TRIGGER_REGISTRY: list[Trigger] = [
         signal_name="third_party_tech_dependency",
         predicate=lambda v: bool(v),
         rationale=(
-            "A critical third-party dependency can weaken the moat (the underlying capability isn't "
-            "proprietary), expose gross margin to the provider's pricing, and create competitive risk if "
-            "the provider launches a directly competing feature."
+            "Une dépendance technique tierce critique peut affaiblir le moat (la brique n'est pas "
+            "propriétaire), exposer la marge brute au pricing du fournisseur, et créer un risque "
+            "concurrentiel si le fournisseur lance une fonctionnalité concurrente."
         ),
         activates=["moat", "competition"],
         research_questions=[
-            "What alternative providers exist to {dep}, and how do their pricing and capabilities compare?",
+            "Quelles alternatives existent à {dep}, et comment se comparent-elles en prix et en capacités ?",
         ],
         founder_questions=[
-            "What percentage of the product's functionality depends on {dep}?",
-            "What happens to gross margin if {dep}'s pricing doubles?",
-            "Could {dep}'s provider launch a directly competing feature?",
+            "Quelle part du produit dépend réellement de {dep} ?",
+            "Que devient la marge brute si le prix de {dep} double ?",
+            "Le fournisseur de {dep} pourrait-il lancer une fonctionnalité directement concurrente ?",
         ],
     ),
 ]

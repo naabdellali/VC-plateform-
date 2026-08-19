@@ -4,9 +4,6 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, ModuleResult, Evidence } from "@/lib/api";
-import { StatusBadge } from "@/components/Badges";
-import EvidenceList from "@/components/EvidenceList";
-import ReasoningTraceView from "@/components/ReasoningTrace";
 import MarketRecalculateForm from "@/components/MarketRecalculateForm";
 import TractionForensicsForms from "@/components/TractionForensicsForms";
 import CompetitorGrid from "@/components/CompetitorGrid";
@@ -16,7 +13,7 @@ import MoatView, { Moat } from "@/components/MoatView";
 import TechnologyView, { TechnologyData } from "@/components/TechnologyView";
 
 const MODULE_LABELS: Record<string, string> = {
-  market: "Market Analysis",
+  market: "Market Sizing",
   competition: "Competitive Landscape",
   moat: "Moat",
   technology: "Technology",
@@ -24,6 +21,11 @@ const MODULE_LABELS: Record<string, string> = {
   business_model: "Business Model",
   founders: "Team & Background",
 };
+
+type BusinessModelData = { label: string; pricing_model: string | null; target_segment: string | null };
+type Founder = { name: string; title: string | null; status: "positive" | "flag" | "unverified"; status_label: string; detail: string | null };
+type TractionClaim = { claim: string; value: string | null };
+type TractionData = { today: TractionClaim[]; tomorrow: TractionClaim[] };
 
 function formatMoneyMaybe(raw: string | null): string | null {
   if (!raw) return null;
@@ -114,7 +116,56 @@ export default function ModuleDetailPage() {
     return null;
   }, [module, hasResult, result]);
 
-  const platformDisplay = hasResult && !tamSamSom && !landscape && !moat && !technology ? formatMoneyMaybe((result as ModuleResult).platform_value) : null;
+  const businessModel = useMemo<BusinessModelData | null>(() => {
+    if (module !== "business_model" || !hasResult) return null;
+    const raw = (result as ModuleResult).platform_value;
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.label) return parsed as BusinessModelData;
+    } catch {
+      /* not JSON */
+    }
+    return null;
+  }, [module, hasResult, result]);
+
+  const founders = useMemo<Founder[] | null>(() => {
+    if (module !== "founders" || !hasResult) return null;
+    const raw = (result as ModuleResult).platform_value;
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.founders) && parsed.founders.length > 0) return parsed.founders as Founder[];
+    } catch {
+      /* not JSON */
+    }
+    return null;
+  }, [module, hasResult, result]);
+
+  const [expandedFounders, setExpandedFounders] = useState<Set<number>>(new Set());
+  const toggleFounder = (i: number) => {
+    setExpandedFounders((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  };
+
+  const traction = useMemo<TractionData | null>(() => {
+    if (module !== "traction" || !hasResult) return null;
+    const raw = (result as ModuleResult).platform_value;
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && (Array.isArray(parsed.today) || Array.isArray(parsed.tomorrow))) return parsed as TractionData;
+    } catch {
+      /* not JSON - e.g. a recalculated single MRR figure; falls through to platformDisplay */
+    }
+    return null;
+  }, [module, hasResult, result]);
+
+  const platformDisplay = hasResult && !tamSamSom && !landscape && !moat && !technology && !businessModel && !founders && !traction ? formatMoneyMaybe((result as ModuleResult).platform_value) : null;
   const deckDisplay = hasResult ? formatMoneyMaybe((result as ModuleResult).deck_value) : null;
 
   return (
@@ -132,15 +183,12 @@ export default function ModuleDetailPage() {
 
       {hasResult && (
         <div className="hero">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-            <div className="hero-label">
-              {module === "competition" || module === "moat"
-                ? "What we found independently"
-                : module === "business_model"
-                ? "As entered on the workspace"
-                : "Our independent conclusion"}
-            </div>
-            <StatusBadge status={(result as ModuleResult).status} />
+          <div className="hero-label">
+            {module === "competition" || module === "moat"
+              ? "What we found independently"
+              : module === "business_model"
+              ? "As entered on the workspace"
+              : "Our independent conclusion"}
           </div>
 
           {module === "market" && tamSamSom ? (
@@ -151,6 +199,64 @@ export default function ModuleDetailPage() {
             <MoatView data={moat} />
           ) : module === "technology" && technology ? (
             <TechnologyView data={technology} />
+          ) : module === "business_model" && businessModel ? (
+            <div className="business-model-block">
+              {businessModel.pricing_model && (
+                <div className="bm-fact">
+                  <div className="bm-fact-label">Pricing</div>
+                  <div className="bm-fact-value">{businessModel.pricing_model}</div>
+                </div>
+              )}
+              {businessModel.target_segment && (
+                <div className="bm-fact">
+                  <div className="bm-fact-label">Cible</div>
+                  <div className="bm-fact-value">{businessModel.target_segment}</div>
+                </div>
+              )}
+              {!businessModel.pricing_model && !businessModel.target_segment && (
+                <p className="hero-empty">{(result as ModuleResult).headline}</p>
+              )}
+            </div>
+          ) : module === "founders" && founders ? (
+            <div className="founder-list">
+              {founders.map((f, i) => {
+                const isExpanded = expandedFounders.has(i);
+                return (
+                  <div
+                    key={i}
+                    className={`founder-row status-${f.status}${isExpanded ? " expanded" : ""}`}
+                    onClick={() => f.detail && toggleFounder(i)}
+                  >
+                    <div className="founder-name">{f.name}{f.title && <span className="founder-title"> — {f.title}</span>}</div>
+                    <div className={`founder-status status-${f.status}`}>{f.status_label}</div>
+                    {f.detail && <div className="founder-detail">{f.detail}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          ) : module === "traction" && traction && (traction.today.length > 0 || traction.tomorrow.length > 0) ? (
+            <div className="traction-split">
+              <div className="traction-col">
+                <div className="traction-col-heading">Aujourd'hui</div>
+                {traction.today.length > 0 ? (
+                  traction.today.map((c, i) => (
+                    <div key={i} className="traction-item">{c.value || c.claim}</div>
+                  ))
+                ) : (
+                  <div className="traction-item-empty">Rien de vérifiable pour l'instant.</div>
+                )}
+              </div>
+              <div className="traction-col">
+                <div className="traction-col-heading">Demain</div>
+                {traction.tomorrow.length > 0 ? (
+                  traction.tomorrow.map((c, i) => (
+                    <div key={i} className="traction-item projection">{c.value || c.claim}</div>
+                  ))
+                ) : (
+                  <div className="traction-item-empty">Aucune projection communiquée.</div>
+                )}
+              </div>
+            </div>
           ) : module === "competition" && competitors.length > 0 ? (
             <>
               <CompetitorGrid competitors={competitors} />
@@ -219,28 +325,6 @@ export default function ModuleDetailPage() {
           </div>
         </details>
       )}
-
-      {hasResult && (
-        <details className="collapsible">
-          <summary>
-            See our full analysis
-            <span className="summary-sub">extract → research → verify → calculate → benchmark → reason</span>
-          </summary>
-          <div className="collapsible-body">
-            <ReasoningTraceView result={result as ModuleResult} />
-          </div>
-        </details>
-      )}
-
-      <details className="collapsible">
-        <summary>
-          Sources
-          <span className="summary-sub">{evidence.length} row(s) — every figure above traces back to one of these</span>
-        </summary>
-        <div className="collapsible-body">
-          <EvidenceList evidence={evidence} />
-        </div>
-      </details>
 
       {module === "market" && hasResult && tamSamSom && (
         <div className="panel">

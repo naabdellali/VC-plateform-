@@ -21,8 +21,37 @@ export function withFootnoteLinks(text: string, prefix: string) {
   });
 }
 
-export default function FootnoteList({ footnotes, prefix }: { footnotes: Footnote[]; prefix: string }) {
+export default function FootnoteList({
+  footnotes,
+  prefix,
+  variant = "card",
+}: {
+  footnotes: Footnote[];
+  prefix: string;
+  variant?: "card" | "document";
+}) {
   if (!footnotes || footnotes.length === 0) return null;
+
+  // Document variant (the printable memo): real footnotes should be small and quiet, not a
+  // stack of bordered chips - the chip/pop-up style is for the module pages only.
+  if (variant === "document") {
+    return (
+      <div className="doc-footnotes">
+        {footnotes.map((fn) => (
+          <div key={fn.n} id={`fn-${prefix}-${fn.n}`}>
+            <sup>{fn.n}</sup>{fn.detail}
+            {fn.source_url && (
+              <>
+                {" — "}
+                <a href={fn.source_url} target="_blank" rel="noreferrer">{fn.source_name || fn.source_url}</a>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="footnote-list">
       {footnotes.map((fn) => (
