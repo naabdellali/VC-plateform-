@@ -13,6 +13,7 @@ TRAY_MODULES = [
     ("market", "Market Analysis"),
     ("competition", "Competitive Landscape"),
     ("moat", "Moat"),
+    ("technology", "Technology"),
     ("traction", "Traction"),
     ("business_model", "Business Model"),
     ("founders", "Team & Background"),

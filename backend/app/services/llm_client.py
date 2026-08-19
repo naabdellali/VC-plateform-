@@ -136,6 +136,34 @@ class LlmClient:
         return self._call_json(system, deck_text[:8000])
 
     # ------------------------------------------------------------------
+    # 1c. Technology architecture / third-party dependency extraction (VC
+    #     Expert Questioning Framework, Technology dimension, section 2.1-2.2).
+    #     Deck-text only, like extract_claims/infer_sector - this is a
+    #     classification of what the deck itself says, not an independently
+    #     verified fact. "critical" is a judgment call about whether the
+    #     dependency is core to the product, made from the deck text alone;
+    #     downstream code must treat it as company_claim-origin, not as a
+    #     verified finding.
+    # ------------------------------------------------------------------
+    def identify_tech_dependencies(self, deck_text: str) -> LlmResult:
+        system = (
+            "Read this pitch deck's raw text and identify its technology architecture. List every "
+            "named third-party dependency the deck mentions or clearly implies the product relies on "
+            "(APIs, cloud providers, foundation models/LLMs, payment providers, data providers, hardware "
+            "suppliers, infrastructure providers). For each, judge whether it appears CRITICAL - i.e. the "
+            "product could not function as described without it - based only on how the deck frames it. "
+            "Separately, list short phrases describing what the deck claims is proprietary/built in-house. "
+            "Never invent a dependency that isn't stated or clearly implied in the text. "
+            'Return JSON: {"dependencies": [{"name": "...", "role": "short phrase - what it powers", '
+            '"critical": true|false, "evidence_text": "verbatim short snippet from the deck"}], '
+            '"proprietary": ["short phrase", ...]}. '
+            "If the deck says nothing about technology/architecture, return empty lists for both."
+        )
+        if self.mode == "mock":
+            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"dependencies": [], "proprietary": []})
+        return self._call_json(system, deck_text[:12000])
+
+    # ------------------------------------------------------------------
     # 2. Contextual query generation (spec section 40)
     # ------------------------------------------------------------------
     def generate_search_queries(self, question: str, context: dict) -> LlmResult:

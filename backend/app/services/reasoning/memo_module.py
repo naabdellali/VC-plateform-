@@ -22,11 +22,12 @@ from sqlalchemy.orm import Session
 from app.models import Company, ModuleResult, RedFlag, RedFlagSeverity, Memo, Recommendation
 from app.services.llm_client import get_llm_client
 
-MODULES_IN_MEMO_ORDER = ["market", "competition", "moat", "traction", "founders"]
+MODULES_IN_MEMO_ORDER = ["market", "competition", "moat", "technology", "traction", "founders"]
 MODULE_LABELS = {
     "market": "Taille de marché (TAM / SAM / SOM)",
     "competition": "Paysage concurrentiel",
     "moat": "Moat (barrière à l'entrée)",
+    "technology": "Technologie",
     "traction": "Traction",
     "founders": "Team & Background",
 }

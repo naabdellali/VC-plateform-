@@ -13,11 +13,13 @@ import CompetitorGrid from "@/components/CompetitorGrid";
 import TamSamSomView, { TamSamSom } from "@/components/TamSamSomView";
 import CompetitiveLandscapeView, { CompetitiveLandscape } from "@/components/CompetitiveLandscapeView";
 import MoatView, { Moat } from "@/components/MoatView";
+import TechnologyView, { TechnologyData } from "@/components/TechnologyView";
 
 const MODULE_LABELS: Record<string, string> = {
   market: "Market Analysis",
   competition: "Competitive Landscape",
   moat: "Moat",
+  technology: "Technology",
   traction: "Traction",
   business_model: "Business Model",
   founders: "Team & Background",
@@ -99,7 +101,20 @@ export default function ModuleDetailPage() {
     return null;
   }, [module, hasResult, result]);
 
-  const platformDisplay = hasResult && !tamSamSom && !landscape && !moat ? formatMoneyMaybe((result as ModuleResult).platform_value) : null;
+  const technology = useMemo<TechnologyData | null>(() => {
+    if (module !== "technology" || !hasResult) return null;
+    const raw = (result as ModuleResult).platform_value;
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.dependencies) return parsed as TechnologyData;
+    } catch {
+      /* not JSON */
+    }
+    return null;
+  }, [module, hasResult, result]);
+
+  const platformDisplay = hasResult && !tamSamSom && !landscape && !moat && !technology ? formatMoneyMaybe((result as ModuleResult).platform_value) : null;
   const deckDisplay = hasResult ? formatMoneyMaybe((result as ModuleResult).deck_value) : null;
 
   return (
@@ -134,6 +149,8 @@ export default function ModuleDetailPage() {
             <CompetitiveLandscapeView data={landscape} />
           ) : module === "moat" && moat ? (
             <MoatView data={moat} />
+          ) : module === "technology" && technology ? (
+            <TechnologyView data={technology} />
           ) : module === "competition" && competitors.length > 0 ? (
             <>
               <CompetitorGrid competitors={competitors} />

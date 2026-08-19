@@ -10,7 +10,7 @@ core promise:
    say "unable to independently verify" - never a fabricated fact.
 """
 from app.models import ModuleResult, Evidence, Memo, Confidence
-from app.services.reasoning import market_module, traction_module, founders_module, competition_module, business_model_module, memo_module
+from app.services.reasoning import market_module, traction_module, founders_module, competition_module, business_model_module, technology_module, memo_module
 
 
 def test_market_module_auto_pass_runs_in_mock_mode(db_session, sample_company, sample_deck):
@@ -114,6 +114,18 @@ def test_competition_module_runs_in_mock_mode(db_session, sample_company, sample
     assert moat_result.status.value in {"needs_review", "insufficient_evidence"}
 
 
+def test_technology_module_runs_in_mock_mode_and_is_honest_about_insufficiency(db_session, sample_company, sample_deck):
+    # Mock mode never invents a dependency it can't ground - with no live LLM,
+    # identify_tech_dependencies always returns empty, so this should be an
+    # honest insufficient_evidence, never a fabricated dependency list.
+    technology_module.run_auto(db_session, sample_company, sample_deck)
+    db_session.commit()
+
+    result = db_session.query(ModuleResult).filter_by(company_id=sample_company.id, module="technology").one()
+    assert result.status.value == "insufficient_evidence"
+    assert result.llm_mode == "mock"
+
+
 def test_business_model_module_is_a_transparent_passthrough(db_session, sample_company, sample_deck):
     business_model_module.run_auto(db_session, sample_company, sample_deck)
     db_session.commit()
@@ -129,6 +141,7 @@ def test_memo_generation_assembles_all_modules_and_recommends_conservatively(db_
     founders_module.run_auto(db_session, sample_company, sample_deck)
     competition_module.run_auto(db_session, sample_company, sample_deck)
     business_model_module.run_auto(db_session, sample_company, sample_deck)
+    technology_module.run_auto(db_session, sample_company, sample_deck)
     db_session.flush()
 
     memo = memo_module.generate_memo(db_session, sample_company)
