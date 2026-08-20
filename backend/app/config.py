@@ -21,6 +21,16 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-sonnet-4-5"
 
+    # Gemini (Google AI Studio) - free-tier alternative LLM provider. Checked FIRST
+    # in LlmClient.__init__ when both keys are set: an analyst who's out of
+    # Anthropic credit but has a Gemini key configured should get the free
+    # provider, not an immediate 400 from Anthropic. See llm_client.py for the
+    # provider-selection logic and the free-tier rate-limit pacing/retry this
+    # requires (10 req/min on gemini-2.5-flash's free tier - tight against a
+    # single deck upload's ~20+ sequential LLM calls).
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-flash"
+
     tavily_api_key: str | None = None
     pappers_api_key: str | None = None
 
@@ -30,7 +40,7 @@ class Settings(BaseSettings):
 
     @property
     def llm_available(self) -> bool:
-        return bool(self.anthropic_api_key)
+        return bool(self.gemini_api_key or self.anthropic_api_key)
 
     @property
     def search_available(self) -> bool:

@@ -17,14 +17,29 @@ callers must propagate `mode == "mock"` into the resulting Evidence rows.
 from __future__ import annotations
 
 import json
+import random
 import re
+import time
 from dataclasses import dataclass
 
 from app.config import get_settings
 
 settings = get_settings()
 
-MOCK_DISCLAIMER = "[MOCK MODE - no ANTHROPIC_API_KEY configured, this is a placeholder, not a verified answer]"
+MOCK_DISCLAIMER = "[MOCK MODE - no LLM API key configured, this is a placeholder, not a verified answer]"
+
+# Gemini free tier (gemini-2.5-flash, Google AI Studio) allows 10 requests/minute -
+# a single dense-deck upload makes ~20-25 sequential LLM calls (legacy extract_claims
+# + Phase 1's 4 passes + 7 reasoning modules' own calls), so without pacing, the
+# platform would burn through the per-minute quota in well under a minute and start
+# getting 429s almost immediately. _GEMINI_MIN_INTERVAL_SECONDS enforces a floor
+# between consecutive calls (a bit over the strict 6.0s that 10/min implies, for
+# headroom); _GEMINI_MAX_RETRIES + exponential backoff absorbs the remaining 429s
+# that pacing alone can't prevent (concurrent requests from other analysts, clock
+# drift, etc.). This trades latency for reliability - honest tradeoff, not free.
+_GEMINI_MIN_INTERVAL_SECONDS = 6.5
+_GEMINI_MAX_RETRIES = 3
+_last_gemini_call_at = 0.0
 
 
 @dataclass
@@ -269,10 +284,20 @@ def _mock_decompose_assumptions(claim: str) -> list[dict]:
 class LlmClient:
     def __init__(self):
         self._client = None
-        if settings.llm_available:
+        self._provider: str | None = None
+        # Gemini checked first: an analyst who's out of Anthropic credit but has a
+        # Gemini key configured should get the free provider, not an immediate 400
+        # from Anthropic on every call. See config.py's comment on gemini_api_key.
+        if settings.gemini_api_key:
+            from google import genai
+
+            self._client = genai.Client(api_key=settings.gemini_api_key)
+            self._provider = "gemini"
+        elif settings.anthropic_api_key:
             import anthropic
 
             self._client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+            self._provider = "anthropic"
 
     @property
     def mode(self) -> str:
@@ -281,6 +306,8 @@ class LlmClient:
     def _call(self, system: str, user: str, max_tokens: int = 2000) -> str:
         if not self._client:
             raise RuntimeError("LLM client called in mock mode - callers must branch on .mode before calling _call")
+        if self._provider == "gemini":
+            return self._call_gemini(system, user, max_tokens)
         resp = self._client.messages.create(
             model=settings.anthropic_model,
             max_tokens=max_tokens,
@@ -289,10 +316,51 @@ class LlmClient:
         )
         return "".join(block.text for block in resp.content if block.type == "text")
 
+    def _call_gemini(self, system: str, user: str, max_tokens: int) -> str:
+        from google.genai import errors, types
+
+        global _last_gemini_call_at
+        config = types.GenerateContentConfig(system_instruction=system, max_output_tokens=max_tokens)
+
+        for attempt in range(_GEMINI_MAX_RETRIES + 1):
+            # Pace calls to stay under the free tier's per-minute quota - see the
+            # module-level comment on _GEMINI_MIN_INTERVAL_SECONDS. This blocks the
+            # request thread, which is the honest cost of a rate-limited free
+            # provider standing in for a paid one with much higher throughput.
+            elapsed = time.time() - _last_gemini_call_at
+            if elapsed < _GEMINI_MIN_INTERVAL_SECONDS:
+                time.sleep(_GEMINI_MIN_INTERVAL_SECONDS - elapsed)
+            try:
+                resp = self._client.models.generate_content(model=settings.gemini_model, contents=user, config=config)
+                _last_gemini_call_at = time.time()
+                return resp.text or ""
+            except errors.APIError as e:
+                _last_gemini_call_at = time.time()
+                if e.code == 429 and attempt < _GEMINI_MAX_RETRIES:
+                    # Exponential backoff with jitter, not a fixed retry delay - avoids
+                    # every stacked-up caller retrying in lockstep and re-triggering the
+                    # same 429 together.
+                    time.sleep((2 ** attempt) * 5 + random.uniform(0, 2))
+                    continue
+                raise
+        raise RuntimeError("unreachable")  # loop always returns or raises
+
     def _call_json(self, system: str, user: str, max_tokens: int = 2000) -> LlmResult:
         if not self._client:
             return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed=None)
-        raw = self._call(system + "\n\nRespond ONLY with valid JSON. No prose, no markdown fences.", user, max_tokens)
+        try:
+            raw = self._call(system + "\n\nRespond ONLY with valid JSON. No prose, no markdown fences.", user, max_tokens)
+        except Exception as e:
+            # A live call can still fail after retries (daily quota fully exhausted,
+            # network error, provider outage) - degrade to "no data from this pass"
+            # rather than crashing the whole upload request. Callers already treat a
+            # malformed/empty `parsed` defensively (e.g. upload.py's
+            # `extraction.parsed if isinstance(extraction.parsed, list) else []`), so
+            # parsed=None here flows through as "nothing extracted this pass", not a
+            # 500. This is NOT the same as mock mode (self.mode still reports "live"
+            # elsewhere) - it's a per-call failure fallback, surfaced honestly in
+            # `text` rather than silently swallowed.
+            return LlmResult(mode="mock", text=f"[LIVE CALL FAILED: {e}] {MOCK_DISCLAIMER}", parsed=None)
         cleaned = _strip_code_fences(raw)
         try:
             parsed = json.loads(cleaned)
@@ -955,7 +1023,10 @@ class LlmClient:
     def reason(self, system: str, user: str, max_tokens: int = 1500) -> LlmResult:
         if self.mode == "mock":
             return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed=None)
-        text = self._call(system, user, max_tokens)
+        try:
+            text = self._call(system, user, max_tokens)
+        except Exception as e:
+            return LlmResult(mode="mock", text=f"[LIVE CALL FAILED: {e}] {MOCK_DISCLAIMER}", parsed=None)
         return LlmResult(mode="live", text=text, parsed=None)
 
 
