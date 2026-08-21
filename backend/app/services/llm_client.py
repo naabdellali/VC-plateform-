@@ -17,6 +17,7 @@ callers must propagate `mode == "mock"` into the resulting Evidence rows.
 from __future__ import annotations
 
 import json
+import logging
 import random
 import re
 import time
@@ -25,6 +26,7 @@ from dataclasses import dataclass
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 MOCK_DISCLAIMER = "[MOCK MODE - no LLM API key configured, this is a placeholder, not a verified answer]"
 
@@ -340,8 +342,11 @@ class LlmClient:
                     # Exponential backoff with jitter, not a fixed retry delay - avoids
                     # every stacked-up caller retrying in lockstep and re-triggering the
                     # same 429 together.
-                    time.sleep((2 ** attempt) * 5 + random.uniform(0, 2))
+                    backoff = (2 ** attempt) * 5 + random.uniform(0, 2)
+                    logger.info("Gemini 429 (attempt %d/%d), backing off %.1fs", attempt + 1, _GEMINI_MAX_RETRIES, backoff)
+                    time.sleep(backoff)
                     continue
+                logger.warning("Gemini call failed with code=%s message=%r (attempt %d/%d)", e.code, e.message, attempt + 1, _GEMINI_MAX_RETRIES + 1)
                 raise
         raise RuntimeError("unreachable")  # loop always returns or raises
 
@@ -360,6 +365,14 @@ class LlmClient:
             # 500. This is NOT the same as mock mode (self.mode still reports "live"
             # elsewhere) - it's a per-call failure fallback, surfaced honestly in
             # `text` rather than silently swallowed.
+            #
+            # CRITICAL: log it. A caught-and-degraded failure that isn't logged is
+            # exactly the "pretend it works" failure mode this whole project has been
+            # fighting - an upload would silently complete with empty results and
+            # nothing anywhere would explain why. logger.warning uses Python's default
+            # stderr handler (no logging config exists in this project), so this shows
+            # up in `render logs` the same way the old unhandled traceback used to.
+            logger.warning("LLM live call failed (provider=%s), degrading this pass: %r", self._provider, e)
             return LlmResult(mode="mock", text=f"[LIVE CALL FAILED: {e}] {MOCK_DISCLAIMER}", parsed=None)
         cleaned = _strip_code_fences(raw)
         try:
@@ -1026,6 +1039,7 @@ class LlmClient:
         try:
             text = self._call(system, user, max_tokens)
         except Exception as e:
+            logger.warning("LLM live call failed (provider=%s), degrading this pass: %r", self._provider, e)
             return LlmResult(mode="mock", text=f"[LIVE CALL FAILED: {e}] {MOCK_DISCLAIMER}", parsed=None)
         return LlmResult(mode="live", text=text, parsed=None)
 
