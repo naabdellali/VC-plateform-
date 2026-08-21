@@ -29,7 +29,12 @@ class Settings(BaseSettings):
     # requires (10 req/min on gemini-2.5-flash's free tier - tight against a
     # single deck upload's ~20+ sequential LLM calls).
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"
+    # gemini-2.5-flash was retired for new-user access shortly after this platform
+    # started using it (Google's own 404 pointed at gemini-3.6-flash as the
+    # replacement - see llm_client.py's logging). Overridable via GEMINI_MODEL
+    # without a redeploy if this one also changes or requires billing - try
+    # "gemini-2.5-flash-lite" as a confirmed-free fallback in that case.
+    gemini_model: str = "gemini-3.6-flash"
 
     tavily_api_key: str | None = None
     pappers_api_key: str | None = None

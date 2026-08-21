@@ -30,14 +30,19 @@ logger = logging.getLogger(__name__)
 
 MOCK_DISCLAIMER = "[MOCK MODE - no LLM API key configured, this is a placeholder, not a verified answer]"
 
-# Gemini free tier (gemini-2.5-flash, Google AI Studio) allows 10 requests/minute -
-# a single dense-deck upload makes ~20-25 sequential LLM calls (legacy extract_claims
-# + Phase 1's 4 passes + 7 reasoning modules' own calls), so without pacing, the
-# platform would burn through the per-minute quota in well under a minute and start
-# getting 429s almost immediately. _GEMINI_MIN_INTERVAL_SECONDS enforces a floor
-# between consecutive calls (a bit over the strict 6.0s that 10/min implies, for
-# headroom); _GEMINI_MAX_RETRIES + exponential backoff absorbs the remaining 429s
-# that pacing alone can't prevent (concurrent requests from other analysts, clock
+# Google AI Studio's free-tier flash models have historically allowed ~10
+# requests/minute (confirmed on gemini-2.5-flash; exact figure for whatever
+# GEMINI_MODEL ends up pointing at - Google's free-tier model lineup and limits
+# change often enough that this project has already had to migrate once, see
+# config.py's comment on gemini_model - may differ, so this stays a conservative
+# floor rather than a precisely-tuned one). A single dense-deck upload makes
+# ~20-25 sequential LLM calls (legacy extract_claims + Phase 1's 4 passes + 7
+# reasoning modules' own calls), so without pacing, the platform would burn
+# through a per-minute quota in well under a minute and start getting 429s almost
+# immediately. _GEMINI_MIN_INTERVAL_SECONDS enforces a floor between consecutive
+# calls (a bit over the strict 6.0s that 10/min implies, for headroom);
+# _GEMINI_MAX_RETRIES + exponential backoff absorbs the remaining 429s that
+# pacing alone can't prevent (concurrent requests from other analysts, clock
 # drift, etc.). This trades latency for reliability - honest tradeoff, not free.
 _GEMINI_MIN_INTERVAL_SECONDS = 6.5
 _GEMINI_MAX_RETRIES = 3
