@@ -43,10 +43,28 @@ MOCK_DISCLAIMER = "[MOCK MODE - no LLM API key configured, this is a placeholder
 # calls (a bit over the strict 6.0s that 10/min implies, for headroom);
 # _GEMINI_MAX_RETRIES + exponential backoff absorbs the remaining 429s that
 # pacing alone can't prevent (concurrent requests from other analysts, clock
-# drift, etc.). This trades latency for reliability - honest tradeoff, not free.
+# drift, etc.), and the same backoff also absorbs transient 503s (the shared
+# free-tier model itself being temporarily overloaded - see
+# _GEMINI_RETRYABLE_CODES below). This trades latency for reliability - honest
+# tradeoff, not free.
 _GEMINI_MIN_INTERVAL_SECONDS = 6.5
 _GEMINI_MAX_RETRIES = 3
 _last_gemini_call_at = 0.0
+
+# Codes worth retrying with backoff: 429 (rate limit) and 503 (the model is
+# temporarily overloaded - "This model is currently experiencing high demand.
+# Spikes in demand are usually temporary. Please try again later.", Google's
+# own wording). Both are transient by nature - the request will likely
+# succeed a few seconds later with no code change needed. A 503 discovered in
+# production was previously falling through to the fail-fast branch below
+# (same as a permanent 404/400/401), degrading that pass after a single
+# attempt even though Google's own message said to just retry - free-tier
+# flash models get overloaded often enough that this was silently emptying
+# out real analysis passes on decks that had done nothing wrong. Deliberately
+# NOT adding 500 here - an internal server error isn't documented by Google as
+# transient the way 503 is, and retrying it burns the retry budget on
+# something backoff can't fix.
+_GEMINI_RETRYABLE_CODES = {429, 503}
 
 
 @dataclass
@@ -343,12 +361,12 @@ class LlmClient:
                 return resp.text or ""
             except errors.APIError as e:
                 _last_gemini_call_at = time.time()
-                if e.code == 429 and attempt < _GEMINI_MAX_RETRIES:
+                if e.code in _GEMINI_RETRYABLE_CODES and attempt < _GEMINI_MAX_RETRIES:
                     # Exponential backoff with jitter, not a fixed retry delay - avoids
                     # every stacked-up caller retrying in lockstep and re-triggering the
-                    # same 429 together.
+                    # same 429/503 together.
                     backoff = (2 ** attempt) * 5 + random.uniform(0, 2)
-                    logger.info("Gemini 429 (attempt %d/%d), backing off %.1fs", attempt + 1, _GEMINI_MAX_RETRIES, backoff)
+                    logger.info("Gemini %s (attempt %d/%d), backing off %.1fs", e.code, attempt + 1, _GEMINI_MAX_RETRIES, backoff)
                     time.sleep(backoff)
                     continue
                 logger.warning("Gemini call failed with code=%s message=%r (attempt %d/%d)", e.code, e.message, attempt + 1, _GEMINI_MAX_RETRIES + 1)

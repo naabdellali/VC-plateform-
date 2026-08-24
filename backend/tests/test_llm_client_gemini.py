@@ -9,8 +9,10 @@ rather than just compile:
    who's out of Anthropic credit but has a Gemini key should get the free
    provider, not an immediate 400 from Anthropic on every call).
 2. The free tier's 10 req/min limit is respected with pacing + retry-with-backoff
-   on 429 - a single dense-deck upload makes ~20+ sequential LLM calls, so without
-   this, every real upload would fail almost immediately.
+   on 429 (rate limit) and 503 (the shared model temporarily overloaded - a real
+   production failure mode, not hypothetical) - a single dense-deck upload makes
+   ~20+ sequential LLM calls, so without this, every real upload would fail
+   almost immediately.
 3. A call that still fails after retries (quota fully exhausted, network error)
    degrades _call_json/reason to a clearly-labelled failure result instead of
    raising and crashing the whole upload request - see the Phase 1 "ne fais pas
@@ -85,6 +87,27 @@ def test_gemini_retries_on_429_and_eventually_succeeds(monkeypatch):
 
     assert text == "the real answer"
     assert client._client.models.generate_content.call_count == 3
+
+
+def test_gemini_retries_on_503_and_eventually_succeeds(monkeypatch):
+    # Discovered in production: gemini-3.6-flash returning 503 ("This model is
+    # currently experiencing high demand... try again later") was previously
+    # NOT retried (only 429 was), so a single transient overload silently
+    # emptied out that pass after just one attempt. Google's own message says
+    # this is transient, so it belongs in the same retry bucket as 429.
+    monkeypatch.setattr(llm_client_module, "_GEMINI_MIN_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(llm_client_module, "_last_gemini_call_at", 0.0)
+    monkeypatch.setattr(llm_client_module.time, "sleep", lambda *_: None)
+
+    client = _client_with_fake_gemini()
+    good_resp = mock.Mock(text="the real answer")
+    client._client.models.generate_content.side_effect = [_FakeAPIError(503, "high demand"), good_resp]
+
+    with mock.patch("google.genai.errors.APIError", _FakeAPIError):
+        text = client._call("system", "user", 500)
+
+    assert text == "the real answer"
+    assert client._client.models.generate_content.call_count == 2
 
 
 def test_gemini_raises_after_exhausting_retries(monkeypatch):
