@@ -66,6 +66,16 @@ _last_gemini_call_at = 0.0
 # something backoff can't fix.
 _GEMINI_RETRYABLE_CODES = {429, 503}
 
+# Mistral's free "Experiment" plan publishes a much higher ceiling (1 req/sec,
+# 500K tokens/minute, 1B tokens/month at the time this was added) than
+# anything Gemini's free flash tier offered - so pacing is a light safety net
+# here, not the load-bearing mechanism it had to be for Gemini. Still retry
+# on 429 with backoff, since exact per-workspace limits aren't published and
+# could differ from the documented baseline.
+_MISTRAL_MIN_INTERVAL_SECONDS = 1.1
+_MISTRAL_MAX_RETRIES = 3
+_last_mistral_call_at = 0.0
+
 
 @dataclass
 class LlmResult:
@@ -310,10 +320,19 @@ class LlmClient:
     def __init__(self):
         self._client = None
         self._provider: str | None = None
-        # Gemini checked first: an analyst who's out of Anthropic credit but has a
-        # Gemini key configured should get the free provider, not an immediate 400
-        # from Anthropic on every call. See config.py's comment on gemini_api_key.
-        if settings.gemini_api_key:
+        # Mistral checked FIRST - it replaced Gemini as the preferred free-tier
+        # provider after Gemini's free tier proved unreliable in production
+        # (model deprecated for new users, then a 20-requests/DAY cap on the
+        # replacement model - see config.py's comment on gemini_api_key for the
+        # full history). Gemini is still checked as a fallback below in case an
+        # analyst has only a Gemini key configured; Anthropic remains the final
+        # fallback for whoever has paid API credit.
+        if settings.mistral_api_key:
+            from mistralai.client import Mistral
+
+            self._client = Mistral(api_key=settings.mistral_api_key)
+            self._provider = "mistral"
+        elif settings.gemini_api_key:
             from google import genai
 
             self._client = genai.Client(api_key=settings.gemini_api_key)
@@ -331,6 +350,8 @@ class LlmClient:
     def _call(self, system: str, user: str, max_tokens: int = 2000) -> str:
         if not self._client:
             raise RuntimeError("LLM client called in mock mode - callers must branch on .mode before calling _call")
+        if self._provider == "mistral":
+            return self._call_mistral(system, user, max_tokens)
         if self._provider == "gemini":
             return self._call_gemini(system, user, max_tokens)
         resp = self._client.messages.create(
@@ -370,6 +391,32 @@ class LlmClient:
                     time.sleep(backoff)
                     continue
                 logger.warning("Gemini call failed with code=%s message=%r (attempt %d/%d)", e.code, e.message, attempt + 1, _GEMINI_MAX_RETRIES + 1)
+                raise
+        raise RuntimeError("unreachable")  # loop always returns or raises
+
+    def _call_mistral(self, system: str, user: str, max_tokens: int) -> str:
+        from mistralai.client import errors
+
+        global _last_mistral_call_at
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+        for attempt in range(_MISTRAL_MAX_RETRIES + 1):
+            elapsed = time.time() - _last_mistral_call_at
+            if elapsed < _MISTRAL_MIN_INTERVAL_SECONDS:
+                time.sleep(_MISTRAL_MIN_INTERVAL_SECONDS - elapsed)
+            try:
+                resp = self._client.chat.complete(model=settings.mistral_model, messages=messages, max_tokens=max_tokens)
+                _last_mistral_call_at = time.time()
+                return resp.choices[0].message.content or ""
+            except errors.MistralError as e:
+                _last_mistral_call_at = time.time()
+                if e.status_code == 429 and attempt < _MISTRAL_MAX_RETRIES:
+                    # Same backoff-with-jitter rationale as the Gemini retry loop above.
+                    backoff = (2 ** attempt) * 5 + random.uniform(0, 2)
+                    logger.info("Mistral 429 (attempt %d/%d), backing off %.1fs", attempt + 1, _MISTRAL_MAX_RETRIES, backoff)
+                    time.sleep(backoff)
+                    continue
+                logger.warning("Mistral call failed with status_code=%s message=%r (attempt %d/%d)", e.status_code, e.message, attempt + 1, _MISTRAL_MAX_RETRIES + 1)
                 raise
         raise RuntimeError("unreachable")  # loop always returns or raises
 

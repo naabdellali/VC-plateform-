@@ -10,9 +10,11 @@ python-pptx==1.0.2
 pdfplumber==0.11.4
 anthropic==0.34.2
 google-genai==2.19.0
+mistralai==2.9.4
 # google-genai>=2.19.0 requires httpx>=0.28.1; anthropic==0.34.2 only requires
-# httpx<1,>=0.23.0, so 0.28.1 satisfies both - do not drop this below 0.28.1
-# without re-checking google-genai's pinned floor.
+# httpx<1,>=0.23.0; mistralai==2.9.4 requires httpx>=0.28.1 (no upper bound) -
+# so 0.28.1 satisfies all three. Do not drop this below 0.28.1 without
+# re-checking google-genai's and mistralai's pinned floors.
 httpx==0.28.1
 python-dotenv==1.0.1
 pytest==8.3.3

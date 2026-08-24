@@ -21,20 +21,40 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-sonnet-4-5"
 
-    # Gemini (Google AI Studio) - free-tier alternative LLM provider. Checked FIRST
-    # in LlmClient.__init__ when both keys are set: an analyst who's out of
-    # Anthropic credit but has a Gemini key configured should get the free
-    # provider, not an immediate 400 from Anthropic. See llm_client.py for the
-    # provider-selection logic and the free-tier rate-limit pacing/retry this
-    # requires (10 req/min on gemini-2.5-flash's free tier - tight against a
-    # single deck upload's ~20+ sequential LLM calls).
+    # Gemini (Google AI Studio) - free-tier LLM provider, kept as a fallback but
+    # NO LONGER preferred (see mistral_api_key below) - in production this
+    # platform hit gemini-2.5-flash being retired for new users within months,
+    # then discovered gemini-3.6-flash's free tier caps at a hard 20
+    # requests/DAY (GenerateRequestsPerDayPerProjectPerModel-FreeTier quota) -
+    # too low for even a single deck upload's ~20-25 sequential LLM calls. See
+    # llm_client.py's logging for how this was diagnosed from Render's log
+    # stream. Left in place (not deleted) as a working fallback provider, not
+    # because it's recommended.
     gemini_api_key: str | None = None
-    # gemini-2.5-flash was retired for new-user access shortly after this platform
-    # started using it (Google's own 404 pointed at gemini-3.6-flash as the
-    # replacement - see llm_client.py's logging). Overridable via GEMINI_MODEL
-    # without a redeploy if this one also changes or requires billing - try
-    # "gemini-2.5-flash-lite" as a confirmed-free fallback in that case.
     gemini_model: str = "gemini-3.6-flash"
+
+    # Mistral AI - now the PREFERRED free-tier provider (checked first in
+    # LlmClient.__init__), added after Gemini's free tier proved too
+    # unreliable for this workload (see gemini_api_key comment above).
+    # Mistral's free "Experiment" plan (console.mistral.ai / admin.mistral.ai,
+    # no credit card - just phone verification) has a much higher published
+    # ceiling (1 req/sec, 500K tokens/minute, 1B tokens/month at the time this
+    # was added) than Gemini's free flash tier ever offered. IMPORTANT DATA
+    # PRIVACY NOTE (verified directly against Mistral's help center, not
+    # assumed): Experiment-plan data IS used to train Mistral's models BY
+    # DEFAULT - there is a real opt-out toggle (admin.mistral.ai -> API ->
+    # Privacy -> "Anonymous improvement data"), but it is OFF by default and
+    # must be manually switched before sending confidential deck content.
+    # This is a materially different default than Gemini's free tier, which
+    # has no opt-out at all - so Mistral is not just "free" but "free with an
+    # actual privacy control", provided that control is actually flipped.
+    mistral_api_key: str | None = None
+    # Versioned model id, not the "-latest" alias - Mistral's alias-resolution
+    # behavior wasn't confirmed stable at the time this was added, and this
+    # project has already been burned twice by an LLM provider silently
+    # repointing/retiring a model name (see gemini_model history above).
+    # Override via MISTRAL_MODEL if this specific version is retired later.
+    mistral_model: str = "mistral-small-2603"
 
     tavily_api_key: str | None = None
     pappers_api_key: str | None = None
@@ -45,7 +65,7 @@ class Settings(BaseSettings):
 
     @property
     def llm_available(self) -> bool:
-        return bool(self.gemini_api_key or self.anthropic_api_key)
+        return bool(self.mistral_api_key or self.gemini_api_key or self.anthropic_api_key)
 
     @property
     def search_available(self) -> bool:
