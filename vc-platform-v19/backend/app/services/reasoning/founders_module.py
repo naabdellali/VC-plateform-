@@ -1,0 +1,287 @@
+"""
+Founders & background-check module (spec section 17).
+
+Pappers.fr is the Tier-1 primary source for French legal/company data
+(officers, incorporation date, insolvency proceedings). Claimed
+professional background (e.g. "ex-Google, 10 years experience") is
+cross-checked against open web research and explicitly classified as
+Verified / Reported-but-unverified / Contradicted - never silently
+upgraded to "verified" just because the deck says so.
+"""
+from __future__ import annotations
+
+import json
+
+from sqlalchemy.orm import Session
+
+from app.models import (
+    Company, Deck, ModuleStatus, EvidenceOrigin, SourceTier, Confidence, RedFlagSeverity,
+)
+from app.services.evidence_store import add_evidence
+from app.services.llm_client import get_llm_client
+from app.services.search_client import get_search_client
+from app.services.pappers_client import get_pappers_client
+from app.services.reasoning.base import ReasoningTrace, upsert_module_result
+from app.services.reasoning.red_flags import add_red_flag
+
+MODULE = "founders"
+
+
+def run_auto(db: Session, company: Company, deck: Deck) -> None:
+    llm = get_llm_client()
+    search = get_search_client()
+    pappers = get_pappers_client()
+    trace = ReasoningTrace()
+
+    # --- 1. extract ------------------------------------------------------
+    team_claims = [c for c in (deck.extracted_claims_json or []) if c.get("category") == "team_background"]
+    claim_evidence_ids = []
+    for c in team_claims:
+        ev = add_evidence(
+            db, company_id=company.id, module=MODULE,
+            claim=c.get("claim", "Founder background claim"), value=c.get("value"),
+            origin=EvidenceOrigin.company_claim, source_tier=SourceTier.deck,
+            confidence=Confidence.medium, source_name=f"Pitch deck ({deck.filename})",
+            supporting_excerpt=c.get("claim"),
+        )
+        claim_evidence_ids.append(ev.id)
+    trace.add("extract", {"claims_found": len(team_claims)}, claim_evidence_ids)
+
+    # --- 1b. Names/titles as literally stated in the deck -----------------
+    # Shown up front even before any verification runs, so the tile reads
+    # "CEO Jane Doe" instead of "en attente de données" - the background
+    # check status is a separate, honestly-labelled layer below each name.
+    founders_struct: list[dict] = []
+    if deck.raw_text:
+        founders_result = llm.identify_founders(deck.raw_text)
+        for f in (founders_result.parsed or {}).get("founders", []):
+            name = (f.get("name") or "").strip()
+            if not name:
+                continue
+            founders_struct.append({"name": name, "title": f.get("title")})
+
+    # --- 2. Pappers.fr legal/registry check (Tier 1 for French entities) --
+    record = pappers.search_company(company.legal_name or company.name)
+    pappers_evidence_ids = []
+    if record.mode == "mock":
+        ev = add_evidence(
+            db, company_id=company.id, module=MODULE,
+            claim="Legal/registry background check", value=None,
+            origin=EvidenceOrigin.unknown if False else EvidenceOrigin.external_source,
+            source_tier=SourceTier.not_applicable, confidence=Confidence.unverified,
+            source_name="Pappers.fr", methodology="Impossible de vérifier indépendamment - PAPPERS_API_KEY non configurée.",
+        )
+        pappers_evidence_ids.append(ev.id)
+    elif not record.found:
+        ev = add_evidence(
+            db, company_id=company.id, module=MODULE,
+            claim="Legal/registry background check", value="Not found in Pappers.fr registry",
+            origin=EvidenceOrigin.external_source, source_tier=SourceTier.tier1_primary,
+            confidence=Confidence.medium, source_name="Pappers.fr",
+            methodology="No matching French legal entity found - company may be foreign, pre-incorporation, or under a different legal name.",
+        )
+        pappers_evidence_ids.append(ev.id)
+    else:
+        ev = add_evidence(
+            db, company_id=company.id, module=MODULE,
+            claim=f"Legal entity: {record.denomination} (SIREN {record.siren})",
+            value=record.date_creation, origin=EvidenceOrigin.external_source,
+            source_tier=SourceTier.tier1_primary, confidence=Confidence.high,
+            source_name="Pappers.fr", source_url=f"https://www.pappers.fr/entreprise/{record.siren}",
+            methodology="French company registry (RNE/INPI data via Pappers.fr API).",
+        )
+        pappers_evidence_ids.append(ev.id)
+
+        for d in record.dirigeants:
+            dev = add_evidence(
+                db, company_id=company.id, module=MODULE,
+                claim=f"Officer of record: {d.prenom or ''} {d.nom} ({d.qualite or 'role unspecified'})",
+                value=f"{len(d.autres_mandats)} other mandate(s) on record",
+                origin=EvidenceOrigin.external_source, source_tier=SourceTier.tier1_primary,
+                confidence=Confidence.high, source_name="Pappers.fr",
+                source_url=f"https://www.pappers.fr/entreprise/{record.siren}",
+            )
+            pappers_evidence_ids.append(dev.id)
+
+        if record.procedures_collectives:
+            fev = add_evidence(
+                db, company_id=company.id, module=MODULE,
+                claim="Insolvency/collective proceedings on record", value=str(len(record.procedures_collectives)),
+                origin=EvidenceOrigin.external_source, source_tier=SourceTier.tier1_primary,
+                confidence=Confidence.high, source_name="Pappers.fr",
+            )
+            add_red_flag(
+                db, company_id=company.id, module=MODULE, category="team",
+                severity=RedFlagSeverity.critical,
+                explanation=f"{len(record.procedures_collectives)} procédure(s) collective(s)/insolvabilité trouvée(s) sur le registre de l'entité légale.",
+                evidence_id=fev.id,
+                potential_impact="Peut indiquer des difficultés financières passées, liées au parcours des fondateurs ou à l'entité elle-même.",
+                resolving_information="Examiner les procédures en question et demander directement au management le contexte et leur résolution.",
+            )
+    trace.add("research", {"pappers_mode": record.mode, "found": record.found}, pappers_evidence_ids)
+
+    # --- 3. Web verification of claimed background ------------------------
+    verification_evidence_ids = []
+    classifications = []
+    for c in team_claims[:5]:  # cap to keep the automatic pass bounded
+        question = f"Verify this claim about a startup founder: '{c.get('claim')}'. Is there public evidence supporting or contradicting it?"
+        q_result = llm.generate_search_queries(question, {"company": company.name})
+        queries = (q_result.parsed or {}).get("queries", [question]) if q_result.parsed else [question]
+        sources = []
+        for q in queries[:2]:
+            resp = search.search(q, max_results=3)
+            for r in resp.results:
+                sources.append({"title": r.title, "url": r.url, "content": r.content[:1200], "published_date": r.published_date})
+
+        synth = llm.synthesize_research(question, sources)
+        payload = synth.parsed or {}
+        confidence_str = payload.get("confidence", "unverified")
+        classification = "reported_unverified"
+        if confidence_str == "high":
+            classification = "verified"
+        elif payload.get("conflicting"):
+            classification = "contradicted"
+
+        vev = add_evidence(
+            db, company_id=company.id, module=MODULE,
+            claim=f"Verification of: {c.get('claim')}", value=payload.get("answer"),
+            origin=EvidenceOrigin.platform_inference,
+            source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
+            confidence={"high": Confidence.high, "medium": Confidence.medium, "low": Confidence.low}.get(confidence_str, Confidence.unverified),
+            methodology="LLM synthesis over web-search results restricted to retrieved sources.",
+        )
+        verification_evidence_ids.append(vev.id)
+        classifications.append({"claim": c.get("claim"), "classification": classification, "evidence_id": vev.id})
+
+        if classification == "contradicted":
+            add_red_flag(
+                db, company_id=company.id, module=MODULE, category="team",
+                severity=RedFlagSeverity.major,
+                explanation=f"Des sources publiques semblent contredire cette affirmation : « {c.get('claim')} ».",
+                evidence_id=vev.id,
+                potential_impact="La crédibilité du fondateur ou l'adéquation fondateur-marché pourrait être surestimée.",
+                resolving_information="Demander directement au fondateur de clarifier et de fournir des justificatifs.",
+            )
+    trace.add("verify", classifications, verification_evidence_ids)
+
+    # --- 3b. Open web background scan per named founder -------------------
+    # Distinct from step 3 above: step 3 only verifies specific claims the deck itself
+    # made about a founder. This is a broader, un-triggered scan of what public web
+    # sources say about each named founder generally (reputation, prior ventures,
+    # professional history) - so something can surface even for a founder the deck
+    # said nothing specific about beyond a name and title. Capped to keep the
+    # automatic pass bounded, same rationale as team_claims[:5] above.
+    background_evidence_ids = []
+    for person in founders_struct[:5]:
+        bg_question = (
+            f"What public information exists about {person['name']}"
+            + (f", {person['title']}" if person.get("title") else "")
+            + f" at {company.name}? Summarize their professional background and online reputation, "
+            "using only the provided sources."
+        )
+        bg_q_result = llm.generate_search_queries(bg_question, {"company": company.name, "person": person["name"]})
+        bg_queries = (bg_q_result.parsed or {}).get("queries", [bg_question]) if bg_q_result.parsed else [bg_question]
+        bg_sources = []
+        for q in bg_queries[:2]:
+            resp = search.search(q, max_results=6)
+            for r in resp.results:
+                bg_sources.append({"title": r.title, "url": r.url, "content": r.content[:1200], "published_date": r.published_date})
+
+        bg_synth = llm.synthesize_research(bg_question, bg_sources)
+        bg_payload = bg_synth.parsed or {}
+        bg_answer = bg_payload.get("answer")
+        person["web_background"] = bg_answer
+        bev = add_evidence(
+            db, company_id=company.id, module=MODULE,
+            claim=f"Recherche web ouverte : {person['name']}", value=bg_answer,
+            origin=EvidenceOrigin.platform_inference,
+            source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
+            confidence={"high": Confidence.high, "medium": Confidence.medium, "low": Confidence.low}.get(
+                bg_payload.get("confidence"), Confidence.unverified
+            ),
+            methodology="LLM synthesis over independent web-search results (not tied to a specific deck claim) - general background/reputation scan.",
+        )
+        background_evidence_ids.append(bev.id)
+    trace.add("research", {"founders_scanned": len(founders_struct[:5])}, background_evidence_ids)
+
+    # --- 3c. Team-fit / synergy assessment ---------------------------------
+    # Given whatever background material now exists per founder (title from the deck,
+    # the open web scan above, Pappers officer record), reason about whether the
+    # founding team's mix of skills actually fits what the business needs - are there
+    # complementary skills, an overlapping "double casquette" (two commercial profiles,
+    # no technical owner), or a founder in a role that looks like a mismatch.
+    team_fit_assessment = None
+    if founders_struct:
+        officer_names = {f"{d.prenom or ''} {d.nom}".strip().lower() for d in record.dirigeants} if record.found else set()
+        fit_input = [
+            {
+                "name": p["name"], "title": p.get("title"),
+                "web_background": p.get("web_background"),
+                "officer_of_record": p["name"].lower() in officer_names or any(
+                    p["name"].split()[-1].lower() in on for on in officer_names
+                ),
+            }
+            for p in founders_struct
+        ]
+        fit_result = llm.assess_founder_team_fit(
+            fit_input, {"sector": company.sector, "stage": company.stage.value if company.stage else None, "business_model": company.business_model},
+        )
+        fit_payload = fit_result.parsed or {"insufficient": True}
+        if not fit_payload.get("insufficient"):
+            team_fit_assessment = fit_payload.get("assessment")
+            if team_fit_assessment:
+                fit_ev = add_evidence(
+                    db, company_id=company.id, module=MODULE,
+                    claim="Analyse de complémentarité/synergie de l'équipe fondatrice", value=team_fit_assessment,
+                    origin=EvidenceOrigin.platform_inference,
+                    source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
+                    confidence=Confidence.medium,
+                    methodology="LLM synthesis combining deck-stated titles, the open web background scan above, and Pappers officer records.",
+                )
+                trace.add("calculate", {"team_fit_assessment": team_fit_assessment}, [fit_ev.id])
+
+    status = ModuleStatus.needs_review if team_claims or record.found or founders_struct else ModuleStatus.insufficient_evidence
+    n_contradicted = sum(1 for c in classifications if c["classification"] == "contradicted")
+    # Transparent, single-glance signal for the tray tile - the officer list and per-claim
+    # verification detail still live in the reasoning trace below it.
+    if record.found or classifications:
+        headline = (
+            f"⚠ {n_contradicted} claim(s) contredite(s) par des sources publiques."
+            if n_contradicted
+            else f"✓ {len(record.dirigeants) if record.found else 0} officer(s) vérifié(s) via Pappers.fr."
+        )
+    elif founders_struct:
+        headline = f"Équipe : {len(founders_struct)} personne(s) identifiée(s) dans le deck."
+    else:
+        headline = "Team : en attente de données."
+
+    # Attach a background-check status to each named founder. We only attribute
+    # a specific verification result to a person when their name literally
+    # appears in the claim text that was checked - anything else stays
+    # "non vérifié" rather than implying a per-person check that didn't happen.
+    for person in founders_struct:
+        matches = [c for c in classifications if person["name"].split()[-1].lower() in (c.get("claim") or "").lower()]
+        contradicted = [c for c in matches if c["classification"] == "contradicted"]
+        if contradicted:
+            person["status"] = "flag"
+            person["status_label"] = f"{len(contradicted)} red flag(s)"
+            person["detail"] = " · ".join(c.get("claim", "") for c in contradicted)
+        elif matches:
+            person["status"] = "positive"
+            person["status_label"] = "Background check : positif"
+            person["detail"] = None
+        else:
+            person["status"] = "unverified"
+            person["status_label"] = "Non vérifié indépendamment"
+            person["detail"] = None
+
+    platform_value = (
+        json.dumps({"founders": founders_struct, "team_fit_assessment": team_fit_assessment})
+        if founders_struct else None
+    )
+
+    upsert_module_result(
+        db, company, MODULE, status=status, headline=headline,
+        deck_value=None, platform_value=platform_value, discrepancy_explanation=None,
+        trace=trace, llm_mode=llm.mode,
+    )

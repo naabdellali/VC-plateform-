@@ -1,0 +1,21 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+sqlalchemy==2.0.35
+psycopg2-binary==2.9.9
+# google-genai==2.19.0 requires pydantic>=2.12.5 - bumped from 2.9.2 to satisfy it.
+pydantic==2.12.5
+pydantic-settings==2.5.2
+python-multipart==0.0.9
+python-pptx==1.0.2
+pdfplumber==0.11.4
+anthropic==0.34.2
+google-genai==2.19.0
+mistralai==2.9.4
+# google-genai>=2.19.0 requires httpx>=0.28.1; anthropic==0.34.2 only requires
+# httpx<1,>=0.23.0; mistralai==2.9.4 requires httpx>=0.28.1 (no upper bound) -
+# so 0.28.1 satisfies all three. Do not drop this below 0.28.1 without
+# re-checking google-genai's and mistralai's pinned floors.
+httpx==0.28.1
+python-dotenv==1.0.1
+pytest==8.3.3
+pytest-asyncio==0.24.0
