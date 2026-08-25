@@ -11,7 +11,7 @@ import json
 from sqlalchemy.orm import Session
 
 from app.models import (
-    Company, Deck, ModuleStatus, EvidenceOrigin, SourceTier, Confidence, RedFlagSeverity,
+    Company, Deck, ModuleResult, ModuleStatus, EvidenceOrigin, SourceTier, Confidence, RedFlagSeverity,
 )
 from app.services.evidence_store import add_evidence
 from app.services.llm_client import get_llm_client
@@ -187,29 +187,62 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             platform_value = json.dumps(landscape_struct)
             trace.add("calculate", landscape_struct, [landscape_ev2.id])
 
-            moat_payload = matrix_payload.get("moat") or {}
-            if moat_payload.get("grade"):
-                moat_struct = {
-                    "grade": moat_payload.get("grade"),
-                    "strengths": moat_payload.get("strengths") or [],
-                    "gaps": moat_payload.get("gaps") or [],
-                    "what_would_widen_it": moat_payload.get("what_would_widen_it") or [],
-                    "footnotes": footnotes,
-                }
-                moat_ev = add_evidence(
-                    db, company_id=company.id, module=MOAT_MODULE,
-                    claim="Independent moat / defensibility grade",
-                    value=json.dumps(moat_struct), value_type="moat_json",
-                    origin=EvidenceOrigin.platform_inference,
-                    source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
-                    confidence=Confidence.medium,
-                    methodology="LLM-graded on the standard No Moat / Narrow Moat / Wide Moat convention, from the same sourced competitive research.",
-                )
-                moat_platform_value = json.dumps(moat_struct)
-                trace.add("calculate", moat_struct, [moat_ev.id])
+    # --- 2d. Moat / defensibility - a dedicated step, run regardless of whether the
+    #         general landscape matrix above succeeded, and explicitly combining the
+    #         Technology module's own read (already computed - see upload.py, which
+    #         now runs Technology before Competition specifically so this data is
+    #         available here) with whatever competitive/sourced material exists. See
+    #         llm_client.evaluate_moat's docstring for why this was split out of
+    #         build_competitive_landscape. ---
+    tech_mr = db.query(ModuleResult).filter_by(company_id=company.id, module="technology").first()
+    tech_payload = {}
+    if tech_mr and tech_mr.platform_value:
+        try:
+            tech_payload = json.loads(tech_mr.platform_value) or {}
+        except (ValueError, TypeError):
+            tech_payload = {}
+    ocean_type_for_moat = (landscape_struct or {}).get("ocean", {}).get("type") if landscape_struct else None
+    moat_result = llm.evaluate_moat(
+        {"sector": company.sector, "hq_country": company.hq_country, "company_name": company.name},
+        tech_payload, competitors_struct, ocean_type_for_moat, landscape_sources,
+    )
+    moat_payload = moat_result.parsed or {"insufficient": True}
+    if not moat_payload.get("insufficient") and moat_payload.get("grade"):
+        moat_footnotes = []
+        for fn in moat_payload.get("footnotes", []) or []:
+            idx = fn.get("source_index")
+            src = landscape_sources[idx] if isinstance(idx, int) and 0 <= idx < len(landscape_sources) else None
+            moat_footnotes.append({
+                "n": fn.get("n"), "detail": fn.get("detail"),
+                "source_url": src["url"] if src else None, "source_name": src["title"] if src else None,
+            })
+        moat_struct = {
+            "grade": moat_payload.get("grade"),
+            "strengths": moat_payload.get("strengths") or [],
+            "gaps": moat_payload.get("gaps") or [],
+            "what_would_widen_it": moat_payload.get("what_would_widen_it") or [],
+            "footnotes": moat_footnotes,
+        }
+        moat_ev = add_evidence(
+            db, company_id=company.id, module=MOAT_MODULE,
+            claim="Independent moat / defensibility grade",
+            value=json.dumps(moat_struct), value_type="moat_json",
+            origin=EvidenceOrigin.platform_inference,
+            source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
+            confidence=Confidence.medium,
+            methodology="LLM-graded on the standard No Moat / Narrow Moat / Wide Moat convention, combining the "
+                        "Technology module's internal read with sourced competitive research.",
+        )
+        moat_platform_value = json.dumps(moat_struct)
+        trace.add("calculate", moat_struct, [moat_ev.id])
 
     # --- 3. collision simulation: incumbent threat (spec section 9) -------
-    collision_q = f"Has any large, well-capitalized incumbent already launched, tested, or explicitly abandoned a product similar to a {company.sector or ''} startup's offering? Why did they stop, if they did?"
+    collision_q = (
+        f"Has any large, well-capitalized incumbent already launched, tested, or explicitly abandoned a product "
+        f"similar to a {company.sector or ''} startup's offering? Why did they stop, if they did? If a source "
+        f"identifies the specific company/entity, name it explicitly in the answer - do not describe it vaguely "
+        f"as 'a competitor' or 'a well-funded player' when a source gives you an actual name."
+    )
     q2 = llm.generate_search_queries(collision_q, {"sector": company.sector})
     collision_queries = (q2.parsed or {}).get("queries", [collision_q]) if q2.parsed else [collision_q]
     collision_sources = []
@@ -234,10 +267,22 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
 
     collision_signal = collision_payload.get("confidence") in ("high", "medium") and collision_payload.get("answer")
     if collision_signal and "unable to independently verify" not in (collision_payload.get("answer") or "").lower():
+        # Name + source, not a vague "a well-funded player" - look up the first cited source from
+        # synthesize_research's own citations list so the red flag is checkable, not just asserted.
+        citations = collision_payload.get("citations") or []
+        source_note = ""
+        for idx in citations:
+            if isinstance(idx, int) and 0 <= idx < len(collision_sources):
+                src = collision_sources[idx]
+                source_note = f" (Source : {src['title']}, {src['url']})"
+                break
         add_red_flag(
             db, company_id=company.id, module=MODULE, category="competition",
             severity=RedFlagSeverity.major,
-            explanation="Un acteur déjà bien financé semble s'être positionné sur ce marché : " + collision_payload["answer"][:300],
+            explanation=(
+                "Un acteur déjà bien financé semble s'être positionné sur ce marché : "
+                + collision_payload["answer"][:300] + source_note
+            ),
             evidence_id=collision_ev.id,
             potential_impact="Remet en question la défendabilité du moat si un acteur mieux capitalisé revient sur ce marché.",
             resolving_information="Demander à l'équipe pourquoi cette tentative antérieure (si confirmée) ne s'applique pas à cette startup.",

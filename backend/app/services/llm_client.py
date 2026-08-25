@@ -542,39 +542,55 @@ class LlmClient:
     # ------------------------------------------------------------------
     def identify_tech_dependencies(self, deck_text: str) -> LlmResult:
         system = (
-            "Read this pitch deck's raw text and identify its technology architecture, for an analyst who will "
-            "read this as THREE separate, clearly distinct blocks in this exact order: (1) what the tech IS, "
-            "(2) dependencies/risk, (3) a maturity grade. Write everything in French, in short, simple, human "
-            "sentences - not academic, not a list of jargon fragments. "
-            "(1) Write one or two plain sentences summarizing what their technology actually is and what they "
-            "own/built (a normal person should understand it immediately - no jargon-only fragments like 'GPS, "
-            "geolocation, critical data'). Separately, list what's proprietary/built in-house as short KEYWORDS "
-            "or short phrases (2-4 words each, e.g. 'moteur de scoring propriétaire', 'modèle de pricing "
-            "interne') - not full sentences, these render as compact tags. "
-            "(2) List every named third-party dependency the deck mentions or clearly implies the product "
+            "Read this pitch deck's raw text and identify its technology architecture, for a VC investment "
+            "professional who already knows this sector and does not need concepts re-explained - write for that "
+            "reader, in French, in FOUR separate, clearly distinct blocks in this exact order: (1) what the tech "
+            "IS, (2) proprietary elements as prose, (3) dependencies/risk, (4) a maturity grade. Use precise, "
+            "sector-appropriate technical vocabulary and name the actual mechanisms (the specific technique, "
+            "architecture pattern, or model type at play) rather than describing them in generic terms - the "
+            "reader wants real technical depth and specificity, not a simplified gloss. This does not mean "
+            "padding with jargon for its own sake: still be direct, precise, and free of filler - just do not "
+            "shy away from technical terms and specifics a sector expert would expect to see named. "
+            "(1) Write one or two sentences summarizing, with real technical specificity, what their technology "
+            "actually is and what they own/built - name the actual approach (e.g. the type of model, the data "
+            "pipeline, the integration pattern) rather than a vague paraphrase. "
+            "(2) Separately, write a short PROSE paragraph (2-4 sentences, not a list) explaining what's "
+            "proprietary/built in-house - what each element actually does technically and why it's a genuine "
+            "asset (e.g. what a proprietary scoring engine actually models, what data advantage a proprietary "
+            "pricing model exploits) - a reasoned technical explanation, not a bare comma-separated list of "
+            "labels. ALSO separately return the same elements as short KEYWORDS/tags (2-4 words each, e.g. "
+            "'moteur de scoring propriétaire') for compact chip display elsewhere in the platform - this tag "
+            "list is a secondary, UI-only field; the prose paragraph in (2) is what actually gets read. "
+            "(3) List every named third-party dependency the deck mentions or clearly implies the product "
             "relies on (APIs, cloud providers, foundation models/LLMs, payment providers, data providers, "
             "hardware suppliers, infrastructure providers). For each, give its name as a short keyword/label, "
-            "then ONE short plain sentence stating the concrete risk if that dependency became unavailable or "
-            "raised its price - not a description of what it does, the RISK it represents. Judge whether it's "
-            "CRITICAL (the product could not function as described without it) based only on how the deck "
-            "frames it. Never invent a dependency that isn't stated or clearly implied in the text. "
-            "(3) Only if you have enough information to judge (do not guess from a thin deck), grade the "
+            "then ONE precise sentence stating the concrete risk if that dependency became unavailable or "
+            "raised its price - not a description of what it does, the RISK it represents, in the vocabulary a "
+            "technical VC would use. Judge whether it's CRITICAL (the product could not function as described "
+            "without it) based only on how the deck frames it. Never invent a dependency that isn't stated or "
+            "clearly implied in the text. "
+            "(4) Only if you have enough information to judge (do not guess from a thin deck), grade the "
             "overall technical maturity as 'Avancé' (real technical depth, hard to replicate quickly), "
             "'Intermédiaire' (solid but replicable with effort), or 'Basique' (thin technical layer, mostly "
             "off-the-shelf/no-code) - use null if there isn't enough to judge, don't force a grade. "
-            'Return JSON: {"tech_summary": "1-2 simple French sentences on what their tech is/does", '
-            '"dependencies": [{"name": "short keyword/label", "risk_note": "one short French sentence on the '
+            'Return JSON: {"tech_summary": "1-2 precise French sentences, real technical specificity", '
+            '"proprietary_narrative": "2-4 sentence French prose paragraph on the proprietary elements" or null, '
+            '"dependencies": [{"name": "short keyword/label", "risk_note": "one precise French sentence on the '
             'concrete risk", "critical": true|false, "evidence_text": "verbatim short snippet from the deck"}], '
             '"proprietary": ["short keyword/phrase", ...], '
-            '"tech_grade": "Avancé"|"Intermédiaire"|"Basique"|null, "tech_grade_reason": "1 short sentence" or null}. '
-            "If the deck says nothing about technology/architecture, return empty lists, null tech_summary, null tech_grade."
+            '"tech_grade": "Avancé"|"Intermédiaire"|"Basique"|null, "tech_grade_reason": "1 precise sentence" or null}. '
+            "If the deck says nothing about technology/architecture, return empty lists, null tech_summary, "
+            "null proprietary_narrative, null tech_grade."
         )
         if self.mode == "mock":
             return LlmResult(
                 mode="mock", text=MOCK_DISCLAIMER,
-                parsed={"tech_summary": None, "dependencies": [], "proprietary": [], "tech_grade": None, "tech_grade_reason": None},
+                parsed={
+                    "tech_summary": None, "proprietary_narrative": None, "dependencies": [], "proprietary": [],
+                    "tech_grade": None, "tech_grade_reason": None,
+                },
             )
-        return self._call_json(system, deck_text[:60000], max_tokens=1200)
+        return self._call_json(system, deck_text[:60000], max_tokens=1400)
 
     # ------------------------------------------------------------------
     # 1d. Short industry display tag (e.g. "Insuretech") - a compact label
@@ -699,6 +715,52 @@ class LlmClient:
         return self._call_json(system, deck_text[:60000], max_tokens=400)
 
     # ------------------------------------------------------------------
+    # 1g2. Founder team-fit / synergy analysis - goes beyond "is this claim
+    #      true" (the web-verification pass above) to ask a different
+    #      question a sharp VC actually asks: given what this business needs
+    #      to execute, is the founding team's mix of skills/experience the
+    #      right one for the roles they hold - or is there a gap (no
+    #      technical co-founder for a deep-tech product) or an overlap (two
+    #      commercially-oriented co-founders and no one owning product/tech)?
+    #      Takes whatever background material is available per founder
+    #      (title from the deck, open-web research synthesis if any, Pappers
+    #      officer record if any) - reasons about complementarity from
+    #      whatever combination exists, doesn't require every founder to have
+    #      a rich profile to say something useful.
+    # ------------------------------------------------------------------
+    def assess_founder_team_fit(self, founders: list[dict], company_context: dict) -> LlmResult:
+        system = (
+            "You are a senior VC analyst assessing whether a startup's founding team composition actually fits "
+            "what the business needs to execute - for a reader who already knows this sector, precise and "
+            "expert-to-expert, never generic. You are given each named founder's title (from the deck) and "
+            "whatever background material is available (open-web research synthesis, legal-registry officer "
+            "data) - use whatever combination exists, do not refuse just because some founders have thin "
+            "profiles. Reason specifically about: (1) COMPLEMENTARITY - do the founders' backgrounds cover the "
+            "distinct functions this business actually needs (e.g. technical/product build, commercial/sales, "
+            "domain expertise, operations) - name the specific gap if one function has no owner (e.g. 'aucun "
+            "cofondateur avec un profil technique pour un produit à forte composante IA'); (2) OVERLAP - are two "
+            "or more founders effectively the same profile/hat (e.g. two commercially-oriented profiles with no "
+            "one clearly owning product or tech) - name it explicitly if so, this is a real signal worth "
+            "surfacing, not a nicety to soften; (3) FIT - for each founder whose title and background are both "
+            "known, is that specific person plausibly the right person for that specific role given this "
+            "business's needs, or does something look mismatched (e.g. a background in enterprise sales leading "
+            "product for a deep-tech company). Never invent a background fact not given to you - if a founder "
+            "has no background material at all, say explicitly that fit cannot be judged for that person rather "
+            "than guessing. Write the assessment as one flowing French paragraph (4-6 sentences), the way one "
+            "analyst would brief another after actually thinking about it - not a checklist, not padding, "
+            "specific and opinionated where the material supports it. "
+            'Return ONLY JSON: {"insufficient": false, "assessment": "..."} or, only if there is truly no '
+            'usable background material for any founder, {"insufficient": true, "reason": "..."}.'
+        )
+        user = f"Company context: {json.dumps(company_context)}\n\nFounders: {json.dumps(founders)}"
+        if self.mode == "mock":
+            return LlmResult(
+                mode="mock", text=MOCK_DISCLAIMER,
+                parsed={"insufficient": True, "reason": "No live research/LLM provider configured - mock mode."},
+            )
+        return self._call_json(system, user, max_tokens=700)
+
+    # ------------------------------------------------------------------
     # 1h. Red flags, connected into one flowing paragraph for the memo.
     #     Purely a rephrasing/connecting pass over findings the platform
     #     already produced (market, competition, moat, financial checks) -
@@ -745,13 +807,17 @@ class LlmClient:
         # it was previously left English-default, which is the main source of the
         # French/English mixing the analyst kept flagging. Write it in French, always.
         system = (
-            "You synthesize web research results into a sourced answer for a VC investor. "
-            "You may ONLY use the provided sources - never your own background knowledge for "
+            "You synthesize web research results into a sourced answer for a VC investor who already knows "
+            "this sector. You may ONLY use the provided sources - never your own background knowledge for "
             "factual/numeric claims. If sources conflict, surface the conflict, do not silently pick one. "
-            "If the sources do not answer the question, say so explicitly. "
-            "Write the 'answer' field in French, in short, simple, human sentences - the way you'd explain "
-            "it out loud to a colleague, not an academic paper. Never mix English words into the French "
-            "sentence except a proper noun/product name. "
+            "If the sources do not answer the question, say so explicitly. Whenever a source names a specific "
+            "company, entity, or individual relevant to the answer, name them explicitly in the answer rather "
+            "than referring to them vaguely (e.g. 'a well-funded competitor') - a named, sourced fact is far "
+            "more useful to an investor than an anonymous one. "
+            "Write the 'answer' field in French, using precise, sector-appropriate technical/business "
+            "vocabulary - the register of one investment professional briefing another, not a simplified "
+            "explanation and not an academic paper. Never mix English words into the French sentence except a "
+            "proper noun/product name. "
             'Return JSON: {"answer": "...", "confidence": "high"|"medium"|"low"|"unverified", '
             '"citations": [source indices used, 0-based], "conflicting": true|false, '
             '"conflict_note": "..." or null}'
@@ -830,12 +896,16 @@ class LlmClient:
         system = (
             f"You are a senior VC analyst writing the competitive-landscape section of a memo for another VC, "
             f"using ONLY the provided sources (plus the company's own pitch-deck text, given separately, for "
-            f"describing what THEY do). The reader is an investment professional - do not explain basic VC "
-            f"concepts, do not write like an encyclopedia entry, get straight to the sharp, specific point a "
-            f"sharp analyst would make. Always call the company by its actual name, "
-            f"'{company_name}' - never 'the company', 'the startup', or 'l'entreprise'. Write everything in "
-            "French, in short, direct, expert-to-expert sentences. Never mix English words into French "
-            "sentences except a proper noun/product name/standard VC term (e.g. keep 'moat' as-is). "
+            f"describing what THEY do). The reader is an investment professional who already knows this sector "
+            f"- do not explain basic VC concepts, do not write like an encyclopedia entry, get straight to the "
+            f"sharp, specific, technically-grounded point a sharp analyst would make, using the precise "
+            f"sector/business vocabulary that reader would expect (name the actual mechanisms, business models, "
+            f"and competitive dynamics at play rather than describing them in generic terms). Always call the "
+            f"company by its actual name, '{company_name}' - never 'the company', 'the startup', or "
+            f"'l'entreprise'. Write everything in French, in direct, expert-to-expert sentences - precise and "
+            "technically specific, not padded or academic, but never dumbed down either. Never mix English "
+            "words into French sentences except a proper noun/product name/standard VC term (e.g. keep 'moat' "
+            "as-is). "
             f"First, in one or two sharp sentences, say what market {company_name} operates in and, if it "
             "clearly serves more than one segment/sub-market, name them - written the way one analyst briefs "
             "another, not a Wikipedia summary. "
@@ -848,49 +918,31 @@ class LlmClient:
             "if genuinely no player was found for a function in a given geography, write 'Aucun acteur "
             "identifié' rather than leaving it ambiguous. "
             "Then identify the single closest comparable company (same country/region as the target if "
-            "possible), state its key facts (funding, notable clients) ONLY if sourced, and write one simple, "
-            "clear sentence on the main competitive risk - analytical judgment, but label it as such, not as "
+            "possible), state its key facts (funding, notable clients) ONLY if sourced, and write one precise "
+            "sentence on the main competitive risk - analytical judgment, but label it as such, not as "
             "sourced fact. "
             "Then classify the competitive intensity as a one-word snapshot label a VC would use in a deck "
             "review: 'blue_ocean' (few/no direct competitors, category still open), 'red_ocean' (many direct "
             "competitors, intense head-to-head competition), or 'blood_red_ocean' (saturated, commoditized, "
             "price-competitive). Base this only on the density/intensity you observe in the sources, and give "
             "2-3 sentences of justification (not just one) - enough for the reasoning to actually stand on its "
-            "own, still short simple French sentences, no padding. "
+            "own, precise and technically grounded, no padding. "
             "Then research whether there has been any recent M&A / acquisition / consolidation activity in "
-            "this sector (a competitor acquired, an incumbent buying into the space, notable exits) - only if "
-            "a source mentions it; if none is mentioned, say so plainly rather than guessing. "
-            "Finally, grade the startup's moat (defensibility / barrier to entry) using ONLY the standard "
-            "three-tier convention: 'No Moat', 'Narrow Moat' (some real but erodable advantage), or 'Wide "
-            "Moat' (a durable, hard-to-replicate advantage). The question you're really answering: is this "
-            f"business model easily copied, and if a large, well-capitalized incumbent in {company_name}'s "
-            "sector decided to enter tomorrow, could they sweep the market? Reason across THREE distinct "
-            "moat dimensions before writing your points: (1) data/tech moat - does the product generate or "
-            "aggregate PROPRIETARY data that compounds over time (e.g. aggregating data across many "
-            "counterparties that no single competitor sees), described in the deck text; this is often the "
-            "most overlooked real moat, look for it specifically; (2) team moat - is there a specific, hard-"
-            "to-replicate expertise or domain knowledge (e.g. know-how that trains/improves their own "
-            "product) described in the deck or sources; (3) competitive-replicability moat - could a "
-            "competent team rebuild the visible product quickly with today's AI tooling, or has/could a "
-            "large incumbent already build this internally. Then, instead of one dense paragraph, give this "
-            "as short, distinct bullet-style points a human can scan in seconds: 2-3 short 'strengths' points "
-            "(what genuinely helps their defensibility today, drawing on the three dimensions above), 2-3 "
-            "short 'gaps' points (what's missing or fragile), and 1-2 short 'what_would_widen_it' points "
-            "(concretely what would need to become true for the moat grade to improve). Each point is ONE "
-            "short, punchy, qualitative sentence that shows real analytical depth - do NOT restate a precise "
-            "number/euro figure inline inside these short points (that reads as copy-pasted, not reasoned); "
-            "cite a footnote marker [n] instead when the point rests on a sourced fact. "
+            "this sector, AND any other signal of a large or strategic player's interest even short of a closed "
+            "deal (an investment, a partnership announcement, exploratory talks reported by a source, a "
+            "well-financed new entrant) - name the specific companies/entities involved whenever a source "
+            "identifies them; never leave this vague when a source gives a name. Only if a source mentions it; "
+            "if genuinely nothing is mentioned, say so plainly rather than guessing. "
             'Return ONLY JSON: {"market_intro": "1-2 sharp French sentences on the market/segments", '
             '"functions": ["..."], "geographies": ["France", "Europe", "États-Unis"], '
             '"matrix": [{"function": "...", "cells": {"France": "names or Aucun acteur identifié", '
             '"Europe": "names or Aucun acteur identifié", "États-Unis": "names or Aucun acteur identifié"}}], '
-            '"closest_comparable": {"name": "...", "description": "1-2 simple sentences, sourced facts only", '
+            '"closest_comparable": {"name": "...", "description": "1-2 precise sentences, sourced facts only", '
             '"source_index": 0 or null}, '
-            '"risk": "1 simple sentence, analyst judgment", '
-            '"ocean": {"type": "blue_ocean"|"red_ocean"|"blood_red_ocean", "reasoning": "2-3 simple sentences"}, '
-            '"consolidation": "1-2 simple sentences on sector M&A/consolidation, or a plain statement that none was found", '
-            '"moat": {"grade": "No Moat"|"Narrow Moat"|"Wide Moat", "strengths": ["short sentence", ...], '
-            '"gaps": ["short sentence", ...], "what_would_widen_it": ["short sentence", ...]}, '
+            '"risk": "1 precise sentence, analyst judgment", '
+            '"ocean": {"type": "blue_ocean"|"red_ocean"|"blood_red_ocean", "reasoning": "2-3 precise sentences"}, '
+            '"consolidation": "1-3 precise sentences naming the specific entities involved in any M&A/investment/'
+            'partnership/entry signal found, or a plain statement that none was found", '
             '"footnotes": [{"n": 1, "source_index": 0, "detail": "Source name, key figure quoted, short"}]} '
             "If the sources are too thin to build any of this, return "
             '{"insufficient": true, "reason": "..."}.'
@@ -909,6 +961,83 @@ class LlmClient:
         return self._call_json(system, user, max_tokens=3500)
 
     # ------------------------------------------------------------------
+    # 3a3. Moat / defensibility grading - a DEDICATED, standalone reasoning
+    #      step, deliberately decoupled from build_competitive_landscape
+    #      (which used to bundle a moat grade into its own output, but that
+    #      meant moat silently went "insufficient" any time the general
+    #      landscape matrix did, and it never saw the Technology module's
+    #      own findings at all since that module ran after Competition in
+    #      the pipeline). This method takes what the platform ALREADY knows
+    #      internally (the Technology module's tech summary/dependencies/
+    #      proprietary elements/grade, and the Competition module's named
+    #      competitors + competitive-intensity read) and puts it in dialogue
+    #      with the external sourced research - an explicit internal-vs-
+    #      external comparison, not just one or the other. The platform is
+    #      expected to form its OWN opinion on defensibility from this
+    #      synthesis, not refuse to grade just because external sources on
+    #      the exact niche are thin - "insufficient" is reserved for the
+    #      case where there is truly nothing to reason from at all (no tech
+    #      read, no competitor read, no sources).
+    # ------------------------------------------------------------------
+    def evaluate_moat(
+        self, company_context: dict, tech_payload: dict | None, competitors: list[dict] | None,
+        ocean_type: str | None, sources: list[dict],
+    ) -> LlmResult:
+        company_name = company_context.get("company_name") or "l'entreprise"
+        system = (
+            f"You are a senior VC analyst grading {company_name}'s moat (defensibility / barrier to entry), "
+            "for a reader who already knows this sector - precise, technically-grounded, expert-to-expert "
+            "French, never dumbed down, never padded. You are given THREE inputs to synthesize, not just one: "
+            "(A) the platform's own internal technology read (what the tech actually is, what's proprietary, "
+            "named third-party dependencies, a technical maturity grade) - already produced by a separate "
+            "analysis pass, treat it as a reliable internal finding; (B) the platform's own internal "
+            "competitive read (named direct/indirect competitors, competitive-intensity classification); "
+            "(C) external web-search sources on the market/competitors. Your job is to put (A) and (B) in "
+            "dialogue WITH (C) - e.g. 'the deck's proprietary scoring engine (internal read) is corroborated/"
+            "undercut by [source]'s description of competitor X's own capability' - an explicit comparison, "
+            "not a report of only one side. "
+            "Grade the moat using ONLY the standard three-tier convention: 'No Moat', 'Narrow Moat' (some real "
+            "but erodable advantage), or 'Wide Moat' (a durable, hard-to-replicate advantage). The question "
+            f"you're really answering: is this business model easily copied, and if a large, well-capitalized "
+            f"incumbent in {company_name}'s sector decided to enter tomorrow, could they sweep the market? "
+            "Reason across THREE distinct moat dimensions: (1) data/tech moat - does the product generate or "
+            "aggregate PROPRIETARY data that compounds over time, per the internal technology read; (2) team "
+            "moat - specific, hard-to-replicate domain expertise; (3) competitive-replicability moat - could a "
+            "competent team rebuild the visible product quickly with today's tooling, or has/could a large "
+            "incumbent already build this internally, per the internal competitive read and external sources. "
+            "Give this as short, distinct, technically-specific points: 2-3 'strengths' points (what genuinely "
+            "helps defensibility today, each explicitly grounded in the internal read, an external source, or "
+            "both), 2-3 'gaps' points (what's missing or fragile), and 1-2 'what_would_widen_it' points "
+            "(concretely what would need to become true for the grade to improve). Each point is ONE precise, "
+            "analytically deep sentence - cite a footnote marker [n] when a point rests on an external sourced "
+            "fact; a point resting purely on the internal technology/competitive read needs no footnote but "
+            "should say so plainly (e.g. 'selon l'architecture décrite dans le deck'). "
+            "FORM YOUR OWN OPINION from whatever combination of (A)/(B)/(C) is actually available - do not "
+            "default to insufficient just because external sources are thin on this exact niche; the internal "
+            "technology and competitive reads alone are often enough to reason about defensibility. Only return "
+            "insufficient=true if (A), (B), and (C) are ALL essentially empty, i.e. there is truly nothing to "
+            "reason from. "
+            'Return ONLY JSON: {"insufficient": false, "grade": "No Moat"|"Narrow Moat"|"Wide Moat", '
+            '"strengths": ["precise sentence", ...], "gaps": ["precise sentence", ...], '
+            '"what_would_widen_it": ["precise sentence", ...], '
+            '"footnotes": [{"n": 1, "source_index": 0, "detail": "Source name, key figure quoted, short"}]} '
+            'or, only if truly nothing to reason from, {"insufficient": true, "reason": "..."}.'
+        )
+        user = (
+            f"Company context: {json.dumps(company_context)}\n\n"
+            f"Internal technology read (from the Technology module): {json.dumps(tech_payload or {})}\n\n"
+            f"Internal competitive read: competitors={json.dumps(competitors or [])}, "
+            f"competitive_intensity={ocean_type or 'non déterminée'}\n\n"
+            "External web-search sources on the market/competitors:\n" + json.dumps(sources, indent=2)[:14000]
+        )
+        if self.mode == "mock":
+            return LlmResult(
+                mode="mock", text=MOCK_DISCLAIMER,
+                parsed={"insufficient": True, "reason": "No live research/LLM provider configured - mock mode."},
+            )
+        return self._call_json(system, user, max_tokens=1800)
+
+    # ------------------------------------------------------------------
     # 3b. Structured competitor identification - used to render an actual
     #     comparison grid in the UI instead of a wall of prose. Strictly
     #     source-restricted: a competitor only appears here if a source
@@ -921,19 +1050,26 @@ class LlmClient:
             "You extract a structured list of named competitors for a startup, using ONLY the "
             "provided web-search sources - never your own background knowledge, and never invent "
             "a competitor that is not explicitly named in the sources. Write descriptions in French, "
-            "in plain, simple sentences - the way you'd explain it to a colleague, not an academic paper. "
+            "for a reader who already knows this sector - precise, technically-grounded, expert-to-expert "
+            "vocabulary, not a simplified gloss, but still direct and free of padding. For EACH competitor, "
+            "the description must explain their BUSINESS MODEL specifically - how they actually make money "
+            "and what they sell (pricing mechanic, target segment, what's actually included in the offering) - "
+            "not a generic one-liner like 'a competitor in this space'; if the sources don't give enough to "
+            "describe the business model, describe as precisely as the sources allow rather than padding. "
             "For each competitor include a website domain ONLY if it is stated in or unambiguous "
             "from the source content/URL; otherwise use null - do not guess a domain. "
             "Also classify each competitor as 'direct' (same core offering, same buyer) or 'indirect' "
             "(adjacent/substitute solution) based only on how the sources describe them, and include their "
             "country/HQ and a rough size descriptor (e.g. 'startup', 'scale-up', 'grand groupe') ONLY when a "
             "source states or clearly implies it - otherwise use null for either field, never guess. "
-            'Return JSON: {"competitors": [{"name": "...", "description": "one factual sentence in French, '
-            'grounded in the sources", "domain": "example.com" or null, "competitor_type": "direct"|"indirect", '
+            'Return JSON: {"competitors": [{"name": "...", "description": "1-2 precise French sentences on '
+            'their business model, grounded in the sources", "domain": "example.com" or null, '
+            '"competitor_type": "direct"|"indirect", '
             '"country": "..." or null, "size": "..." or null, "source_index": 0}], '
             '"confidence": "high"|"medium"|"low"|"unverified"}. '
-            "Return at most 8 competitors, most relevant first. If none are explicitly named in "
-            "the sources, return an empty list rather than guessing."
+            "Return at most 8 competitors, most relevant first, covering BOTH direct and indirect competitors "
+            "whenever the sources support it - do not return only direct competitors if indirect ones are also "
+            "named. If none are explicitly named in the sources, return an empty list rather than guessing."
         )
         user = f"Question: {question}\n\nSources:\n" + json.dumps(sources, indent=2)[:12000]
         if self.mode == "mock":

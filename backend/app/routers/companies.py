@@ -4,8 +4,9 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.deps import get_company_or_404
 from app.models import Company, ModuleResult, RedFlag
-from app.schemas import CompanyCreate, CompanyOut, CompanyDetailOut, TrayTile
+from app.schemas import CompanyCreate, CompanyOut, CompanyDetailOut, TrayTile, DashboardSummaryOut
 from app.rules.stage_rules import get_stage_priorities
+from app.services.dashboard_summary import build_dashboard_summary
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 
@@ -33,6 +34,16 @@ def create_company(payload: CompanyCreate, db: Session = Depends(get_db)):
 @router.get("", response_model=list[CompanyOut])
 def list_companies(db: Session = Depends(get_db)):
     return db.query(Company).order_by(Company.created_at.desc()).all()
+
+
+@router.get("/dashboard-summary", response_model=DashboardSummaryOut)
+def get_dashboard_summary(db: Session = Depends(get_db)):
+    """Everything the dashboard needs in one call: per-company recommendation/
+    ask/red-flag aggregates, portfolio totals, and a recent-activity feed -
+    all derived from real rows (Memo, Deck, RedFlag timestamps), nothing
+    synthetic. A company with no memo generated yet reports
+    recommendation=None rather than a guessed/default status."""
+    return build_dashboard_summary(db)
 
 
 @router.get("/{company_id}", response_model=CompanyDetailOut)

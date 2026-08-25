@@ -164,6 +164,82 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             )
     trace.add("verify", classifications, verification_evidence_ids)
 
+    # --- 3b. Open web background scan per named founder -------------------
+    # Distinct from step 3 above: step 3 only verifies specific claims the deck itself
+    # made about a founder. This is a broader, un-triggered scan of what public web
+    # sources say about each named founder generally (reputation, prior ventures,
+    # professional history) - so something can surface even for a founder the deck
+    # said nothing specific about beyond a name and title. Capped to keep the
+    # automatic pass bounded, same rationale as team_claims[:5] above.
+    background_evidence_ids = []
+    for person in founders_struct[:5]:
+        bg_question = (
+            f"What public information exists about {person['name']}"
+            + (f", {person['title']}" if person.get("title") else "")
+            + f" at {company.name}? Summarize their professional background and online reputation, "
+            "using only the provided sources."
+        )
+        bg_q_result = llm.generate_search_queries(bg_question, {"company": company.name, "person": person["name"]})
+        bg_queries = (bg_q_result.parsed or {}).get("queries", [bg_question]) if bg_q_result.parsed else [bg_question]
+        bg_sources = []
+        for q in bg_queries[:2]:
+            resp = search.search(q, max_results=6)
+            for r in resp.results:
+                bg_sources.append({"title": r.title, "url": r.url, "content": r.content[:1200], "published_date": r.published_date})
+
+        bg_synth = llm.synthesize_research(bg_question, bg_sources)
+        bg_payload = bg_synth.parsed or {}
+        bg_answer = bg_payload.get("answer")
+        person["web_background"] = bg_answer
+        bev = add_evidence(
+            db, company_id=company.id, module=MODULE,
+            claim=f"Recherche web ouverte : {person['name']}", value=bg_answer,
+            origin=EvidenceOrigin.platform_inference,
+            source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
+            confidence={"high": Confidence.high, "medium": Confidence.medium, "low": Confidence.low}.get(
+                bg_payload.get("confidence"), Confidence.unverified
+            ),
+            methodology="LLM synthesis over independent web-search results (not tied to a specific deck claim) - general background/reputation scan.",
+        )
+        background_evidence_ids.append(bev.id)
+    trace.add("research", {"founders_scanned": len(founders_struct[:5])}, background_evidence_ids)
+
+    # --- 3c. Team-fit / synergy assessment ---------------------------------
+    # Given whatever background material now exists per founder (title from the deck,
+    # the open web scan above, Pappers officer record), reason about whether the
+    # founding team's mix of skills actually fits what the business needs - are there
+    # complementary skills, an overlapping "double casquette" (two commercial profiles,
+    # no technical owner), or a founder in a role that looks like a mismatch.
+    team_fit_assessment = None
+    if founders_struct:
+        officer_names = {f"{d.prenom or ''} {d.nom}".strip().lower() for d in record.dirigeants} if record.found else set()
+        fit_input = [
+            {
+                "name": p["name"], "title": p.get("title"),
+                "web_background": p.get("web_background"),
+                "officer_of_record": p["name"].lower() in officer_names or any(
+                    p["name"].split()[-1].lower() in on for on in officer_names
+                ),
+            }
+            for p in founders_struct
+        ]
+        fit_result = llm.assess_founder_team_fit(
+            fit_input, {"sector": company.sector, "stage": company.stage.value if company.stage else None, "business_model": company.business_model},
+        )
+        fit_payload = fit_result.parsed or {"insufficient": True}
+        if not fit_payload.get("insufficient"):
+            team_fit_assessment = fit_payload.get("assessment")
+            if team_fit_assessment:
+                fit_ev = add_evidence(
+                    db, company_id=company.id, module=MODULE,
+                    claim="Analyse de complémentarité/synergie de l'équipe fondatrice", value=team_fit_assessment,
+                    origin=EvidenceOrigin.platform_inference,
+                    source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
+                    confidence=Confidence.medium,
+                    methodology="LLM synthesis combining deck-stated titles, the open web background scan above, and Pappers officer records.",
+                )
+                trace.add("calculate", {"team_fit_assessment": team_fit_assessment}, [fit_ev.id])
+
     status = ModuleStatus.needs_review if team_claims or record.found or founders_struct else ModuleStatus.insufficient_evidence
     n_contradicted = sum(1 for c in classifications if c["classification"] == "contradicted")
     # Transparent, single-glance signal for the tray tile - the officer list and per-claim
@@ -199,7 +275,10 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             person["status_label"] = "Non vérifié indépendamment"
             person["detail"] = None
 
-    platform_value = json.dumps({"founders": founders_struct}) if founders_struct else None
+    platform_value = (
+        json.dumps({"founders": founders_struct, "team_fit_assessment": team_fit_assessment})
+        if founders_struct else None
+    )
 
     upsert_module_result(
         db, company, MODULE, status=status, headline=headline,

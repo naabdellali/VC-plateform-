@@ -24,7 +24,7 @@ from app.models import Company, Deck, ModuleResult, RedFlag, RedFlagSeverity, Me
 from app.services.calc.parsing import parse_money
 from app.services.llm_client import get_llm_client
 
-MODULES_IN_MEMO_ORDER = ["market", "market_dynamics", "competition", "moat", "technology", "traction", "founders"]
+MODULES_IN_MEMO_ORDER = ["market", "market_dynamics", "competition", "technology", "moat", "traction", "founders"]
 MODULE_LABELS = {
     "market": "Taille de marché (TAM / SAM / SOM)",
     "market_dynamics": "Dynamique de marché",
@@ -50,6 +50,37 @@ CATEGORY_LABEL_FR = {
 
 _EARLY_STAGES = {Stage.pre_seed, Stage.seed}
 
+# Shared with the dashboard summary endpoint (app/routers/companies.py) so the
+# recommendation wording/coloring is defined in exactly one place, not
+# duplicated between the memo document and the company list.
+CONTINUE_LABEL = {
+    "invest": "Continuer — dossier prioritaire",
+    "pass": "Ne pas continuer",
+    "watchlist": "Continuer, avec vigilance",
+    "need_more_data": "Continuer — données manquantes",
+}
+CONTINUE_COLOR = {
+    "invest": "positive",
+    "pass": "negative",
+    "watchlist": "watch",
+    "need_more_data": "neutral",
+}
+
+
+def extract_ask_amount(deck: Deck | None) -> float | None:
+    """The amount a company is raising, if the deck states one - deliberately
+    deck-derived, never invented. Returns None (never a fabricated 0/n.a.) when
+    nothing was extracted. Shared by the memo (overview tags) and the dashboard
+    summary endpoint so both read the exact same figure."""
+    if not deck or not deck.extracted_claims_json:
+        return None
+    for c in deck.extracted_claims_json:
+        if c.get("category") == "fundraising_history":
+            amount = parse_money(c.get("value") or c.get("claim", ""))
+            if amount:
+                return amount
+    return None
+
 
 def _score_recommendation(module_results: list[ModuleResult], red_flags: list[RedFlag], stage: Stage | None = None) -> tuple[Recommendation, str]:
     """The Recommendation enum stays internal/deterministic (spec section 53: no black-box
@@ -72,7 +103,7 @@ def _score_recommendation(module_results: list[ModuleResult], red_flags: list[Re
     # compléter" (which reads as a generic, checklist-style non-answer for a company this early).
     if stage in _EARLY_STAGES:
         return Recommendation.need_more_data, (
-            "Aucun red flag disqualifiant. À ce stade (early-stage), l'enjeu n'est pas la précision des calculs "
+            "Aucun red flag disqualifiant. À ce stade, l'enjeu n'est pas la précision des calculs "
             "financiers mais la preuve du product-market fit : clarté du problème adressé, retours clients réels "
             "et premiers signaux de rétention. C'est ce qu'il faut creuser avant de statuer."
         )
@@ -96,15 +127,7 @@ def generate_memo(db: Session, company: Company) -> Memo:
     by_module = {m.module: m for m in module_results}
     deck = db.query(Deck).filter_by(company_id=company.id).order_by(Deck.uploaded_at.desc()).first()
 
-    # Ask amount, if the deck states one - deliberately deck-derived, not invented; omitted
-    # entirely (not shown as "n/a") if nothing was extracted, per "never fabricate a figure."
-    ask_amount = None
-    if deck and deck.extracted_claims_json:
-        for c in deck.extracted_claims_json:
-            if c.get("category") == "fundraising_history":
-                ask_amount = parse_money(c.get("value") or c.get("claim", ""))
-                if ask_amount:
-                    break
+    ask_amount = extract_ask_amount(deck)
 
     overview_tags = [t for t in [
         company.industry_tag or (company.sector.split(",")[0][:24] if company.sector else None),
@@ -195,19 +218,54 @@ def generate_memo(db: Session, company: Company) -> Memo:
                     if tech.get("tech_grade_reason"):
                         grade_p += f" {tech['tech_grade_reason']}"
                     paragraphs.append(grade_p)
-                if tech.get("proprietary"):
-                    paragraphs.append(f"Élément(s) propriétaire(s) déclaré(s) : {', '.join(tech['proprietary'])}.")
+                # Proprietary elements: written prose (proprietary_narrative), not a bare comma-joined
+                # tag list - the tags themselves (tech["proprietary"]) stay reserved for compact chip
+                # display elsewhere in the platform. Fall back to a plainly-worded (grammatically
+                # correct, no "(s)" artifact) tag listing only if the model didn't produce prose - e.g.
+                # in mock mode, or an older cached result predating this field.
+                if tech.get("proprietary_narrative"):
+                    paragraphs.append(tech["proprietary_narrative"])
+                elif tech.get("proprietary"):
+                    paragraphs.append("Éléments propriétaires déclarés : " + ", ".join(tech["proprietary"]) + ".")
                 deps = tech.get("dependencies") or []
                 critical_deps = [d for d in deps if d.get("critical")]
                 other_deps = [d for d in deps if not d.get("critical")]
                 if critical_deps:
-                    dep_bits = [
-                        f"{d['name']} — {d['risk_note']}" if d.get("risk_note") else d["name"]
+                    dep_lines = [
+                        "• " + (f"{d['name']} — {d['risk_note']}" if d.get("risk_note") else d["name"])
                         for d in critical_deps
                     ]
-                    paragraphs.append("Dépendance(s) jugée(s) critique(s) : " + " ; ".join(dep_bits) + ".")
+                    paragraphs.append("Dépendances jugées critiques :\n" + "\n".join(dep_lines))
                 if other_deps:
-                    paragraphs.append("Autre(s) dépendance(s), non critique(s) : " + ", ".join(d["name"] for d in other_deps) + ".")
+                    paragraphs.append("Autres dépendances, non critiques : " + ", ".join(d["name"] for d in other_deps) + ".")
+                if paragraphs:
+                    sections.append({"title": MODULE_LABELS[module_key], "body": "\n\n".join(paragraphs), "evidence_ids": mr.evidence_ids_json or []})
+                    continue
+
+        # Founders: named team + background-check status, then the team-fit/synergy
+        # assessment (assess_founder_team_fit) - previously this module had no dedicated
+        # renderer at all and fell through to the one-line headline below, so the actual
+        # named founders and the synergy analysis never reached the memo document.
+        if module_key == "founders" and mr.platform_value:
+            try:
+                founders_data = json.loads(mr.platform_value)
+            except (ValueError, TypeError):
+                founders_data = None
+            if isinstance(founders_data, dict):
+                paragraphs = []
+                founders_list = founders_data.get("founders") or []
+                if founders_list:
+                    lines = []
+                    for f in founders_list:
+                        line = f.get("name", "")
+                        if f.get("title"):
+                            line += f" — {f['title']}"
+                        if f.get("status_label"):
+                            line += f" ({f['status_label']})"
+                        lines.append("• " + line)
+                    paragraphs.append("\n".join(lines))
+                if founders_data.get("team_fit_assessment"):
+                    paragraphs.append(founders_data["team_fit_assessment"])
                 if paragraphs:
                     sections.append({"title": MODULE_LABELS[module_key], "body": "\n\n".join(paragraphs), "evidence_ids": mr.evidence_ids_json or []})
                     continue
@@ -251,12 +309,6 @@ def generate_memo(db: Session, company: Company) -> Memo:
         sections.append({"title": "Red Flags", "body": "Aucun red flag identifié par l'analyse automatique.", "evidence_ids": []})
 
     recommendation, rationale = _score_recommendation(module_results, red_flags, company.stage)
-    CONTINUE_LABEL = {
-        "invest": "Continuer — dossier prioritaire",
-        "pass": "Ne pas continuer",
-        "watchlist": "Continuer, avec vigilance",
-        "need_more_data": "Continuer — données manquantes",
-    }
     sections.append({
         "title": "Faut-il continuer ?",
         "kind": "recommendation", "body": rationale,

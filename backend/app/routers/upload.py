@@ -102,10 +102,16 @@ async def upload_deck(
         market_module.run_auto(db, company, deck)
     if "market_dynamics" in modules_triggered:
         market_dynamics_module.run_auto(db, company, deck)
-    if "competition" in modules_triggered:
-        competition_module.run_auto(db, company, deck)
+    # Technology BEFORE Competition: the Moat evaluation computed inside
+    # competition_module.run_auto now explicitly combines the Technology module's
+    # own findings (tech summary, dependencies, proprietary elements, grade) with
+    # the competitive research - it reads Technology's already-persisted
+    # ModuleResult from the DB, so Technology must have already run. See
+    # competition_module.py's step 2d and llm_client.evaluate_moat.
     if "technology" in modules_triggered:
         technology_module.run_auto(db, company, deck)
+    if "competition" in modules_triggered:
+        competition_module.run_auto(db, company, deck)
     if "traction" in modules_triggered:
         traction_module.run_auto(db, company, deck)
     if "founders" in modules_triggered:

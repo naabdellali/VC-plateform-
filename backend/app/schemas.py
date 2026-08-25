@@ -108,3 +108,54 @@ class TrayTile(BaseModel):
 class AnalyzeResponse(BaseModel):
     company: CompanyOut
     modules_triggered: list[str]
+
+
+class CompanyDashboardItem(BaseModel):
+    """One dashboard row - CompanyOut's fields plus the aggregates the
+    dashboard needs (latest recommendation, ask amount, red flag counts).
+    Kept as its own model rather than stretched onto CompanyOut: these are
+    derived/aggregated values (latest Memo, sum over RedFlag/Deck rows), not
+    plain Company columns, and not every caller of CompanyOut wants them
+    computed on every request."""
+
+    id: str
+    name: str
+    sector: Optional[str] = None
+    industry_tag: Optional[str] = None
+    stage: str
+    business_model: str
+    # None until a memo has actually been generated for this company - never
+    # guessed or defaulted to a "neutral" recommendation in the meantime.
+    recommendation: Optional[str] = None
+    recommendation_label: Optional[str] = None
+    recommendation_color: Optional[str] = None
+    ask_amount: Optional[float] = None
+    red_flag_count: int = 0
+    red_flag_critical_count: int = 0
+    needs_review: bool = False
+
+
+class DashboardActivityItem(BaseModel):
+    type: str  # "deck_upload" | "red_flag" | "memo_generated"
+    company_id: str
+    company_name: str
+    text: str
+    severity: Optional[str] = None
+    at: datetime
+
+
+class DashboardTotals(BaseModel):
+    active_count: int
+    total_ask_amount: float
+    # How many companies actually contributed a figure to total_ask_amount -
+    # the dashboard needs this to say "sur 4 sur 5 dossiers" rather than
+    # imply the total covers every company when some stated no ask at all.
+    companies_with_ask: int
+    prioritized_count: int
+    needs_review_count: int
+
+
+class DashboardSummaryOut(BaseModel):
+    companies: list[CompanyDashboardItem]
+    totals: DashboardTotals
+    recent_activity: list[DashboardActivityItem]
