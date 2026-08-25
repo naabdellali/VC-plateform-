@@ -1,0 +1,125 @@
+"""
+Business Model tile: deliberately NOT a research/reasoning module. It used
+to be folded into the Traction tile ("Traction & Business Model"), but the
+business model is just a fixed field the analyst sets on the company
+workspace form - there is no independent research to run on it, so
+bundling it with Traction's forensic checks was misleading (it implied
+both were "analyzed" to the same depth).
+
+Split out on its own so the tray is honest about what this tile is: a
+transparent mirror of the workspace field, not a platform conclusion. The
+one addition on top of the raw enum label is the pricing mechanic and the
+target customer segment - both extracted from the deck's own text (never
+guessed), because "SaaS" alone tells an analyst almost nothing: a per-seat
+enterprise SaaS and a usage-based PLG SaaS are different businesses.
+"""
+from __future__ import annotations
+
+import json
+
+from sqlalchemy.orm import Session
+
+from app.models import Company, Deck, ModuleStatus, EvidenceOrigin, SourceTier, Confidence
+from app.services.evidence_store import add_evidence
+from app.services.reasoning.base import ReasoningTrace, upsert_module_result
+from app.services.llm_client import get_llm_client
+
+MODULE = "business_model"
+
+_LABELS = {
+    "saas": "SaaS",
+    "marketplace": "Marketplace",
+    "hardware": "Hardware",
+    "consumer": "Consumer",
+    "fintech": "Fintech",
+    "deeptech": "Deeptech",
+    "other": "Other",
+}
+
+
+def run_auto(db: Session, company: Company, deck: Deck | None = None) -> None:
+    llm = get_llm_client()
+    trace = ReasoningTrace()
+    label = _LABELS.get(company.business_model.value, company.business_model.value)
+
+    ev = add_evidence(
+        db, company_id=company.id, module=MODULE,
+        claim="Business model (as entered on the company workspace)", value=label,
+        origin=EvidenceOrigin.company_claim, source_tier=SourceTier.not_applicable,
+        confidence=Confidence.medium,
+        methodology="Champ du formulaire de workspace, renseigné par l'analyste - non recherché ni vérifié indépendamment.",
+    )
+    trace.add("extract", {"business_model": label}, [ev.id])
+
+    pricing_model = None
+    target_segment = None
+    explanation = None
+    llm_mode = "n/a"
+
+    if deck is not None and deck.raw_text:
+        details_result = llm.identify_business_model_details(deck.raw_text)
+        details = details_result.parsed or {}
+        pricing_model = details.get("pricing_model")
+        target_segment = details.get("target_segment")
+        llm_mode = details_result.mode
+
+        detail_evidence_ids = []
+        if pricing_model:
+            det_ev = add_evidence(
+                db, company_id=company.id, module=MODULE,
+                claim="Mécanique de pricing (telle que décrite dans le deck)", value=pricing_model,
+                origin=EvidenceOrigin.company_claim, source_tier=SourceTier.not_applicable,
+                confidence=Confidence.low,
+                methodology="Extrait du texte du deck par LLM - non vérifié indépendamment.",
+            )
+            detail_evidence_ids.append(det_ev.id)
+        if target_segment:
+            seg_ev = add_evidence(
+                db, company_id=company.id, module=MODULE,
+                claim="Segment cible (tel que décrit dans le deck)", value=target_segment,
+                origin=EvidenceOrigin.company_claim, source_tier=SourceTier.not_applicable,
+                confidence=Confidence.low,
+                methodology="Extrait du texte du deck par LLM - non vérifié indépendamment.",
+            )
+            detail_evidence_ids.append(seg_ev.id)
+        if detail_evidence_ids:
+            trace.add("extract_details", {"pricing_model": pricing_model, "target_segment": target_segment}, detail_evidence_ids)
+
+        # Expanded, generalized "detail on click" - how the mechanic actually
+        # plays out for this company's customers, reasoned from the deck's
+        # own pricing logic rather than a hardcoded illustrative example.
+        if pricing_model or target_segment:
+            explain_result = llm.explain_business_model(deck.raw_text, pricing_model, target_segment)
+            explanation = (explain_result.parsed or {}).get("explanation")
+            if explanation:
+                exp_ev = add_evidence(
+                    db, company_id=company.id, module=MODULE,
+                    claim="Explication de la mécanique de revenu", value=explanation,
+                    origin=EvidenceOrigin.platform_inference,
+                    source_tier=SourceTier.llm_inference if explain_result.mode == "live" else SourceTier.not_applicable,
+                    confidence=Confidence.low,
+                    methodology="Raisonnement LLM à partir de la mécanique de pricing extraite du deck - généralisé, pas d'exemple client inventé.",
+                )
+                trace.add("explain_mechanics", {"explanation": explanation}, [exp_ev.id])
+
+    # Headline shows the pricing mechanic + segment directly when known - "SaaS"
+    # alone tells an analyst almost nothing at a glance.
+    detail_parts = [p for p in (pricing_model, target_segment) if p]
+    if detail_parts:
+        headline = f"{label} — {', '.join(detail_parts)}."
+    else:
+        headline = f"Business model : {label}."
+
+    platform_value = json.dumps({
+        "label": label,
+        "pricing_model": pricing_model,
+        "target_segment": target_segment,
+        "explanation": explanation,
+    })
+
+    upsert_module_result(
+        db, company, MODULE, status=ModuleStatus.complete,
+        headline=headline,
+        deck_value=None, platform_value=platform_value, discrepancy_explanation=None,
+        trace=trace, llm_mode=llm_mode,
+    )
