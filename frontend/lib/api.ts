@@ -63,6 +63,43 @@ export type RedFlag = {
   resolving_information: string | null;
 };
 
+export type CompanyDashboardItem = {
+  id: string;
+  name: string;
+  sector: string | null;
+  industry_tag: string | null;
+  stage: string;
+  business_model: string;
+  recommendation: string | null;
+  recommendation_label: string | null;
+  recommendation_color: "positive" | "watch" | "neutral" | "negative" | null;
+  ask_amount: number | null;
+  red_flag_count: number;
+  red_flag_critical_count: number;
+  needs_review: boolean;
+};
+
+export type DashboardActivityItem = {
+  type: "deck_upload" | "red_flag" | "memo_generated";
+  company_id: string;
+  company_name: string;
+  text: string;
+  severity: string | null;
+  at: string;
+};
+
+export type DashboardSummary = {
+  companies: CompanyDashboardItem[];
+  totals: {
+    active_count: number;
+    total_ask_amount: number;
+    companies_with_ask: number;
+    prioritized_count: number;
+    needs_review_count: number;
+  };
+  recent_activity: DashboardActivityItem[];
+};
+
 export type Memo = {
   id: string;
   version: string;
@@ -88,6 +125,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<{ status: string; llm_mode: string; search_mode: string; pappers_mode: string }>("/health"),
   listCompanies: () => request<Company[]>("/companies"),
+  getDashboardSummary: () => request<DashboardSummary>("/companies/dashboard-summary"),
   createCompany: (name: string) => request<Company>("/companies", { method: "POST", body: JSON.stringify({ name }) }),
   getCompany: (id: string) => request<Company>(`/companies/${id}`),
   getTray: (id: string) => request<TrayTile[]>(`/companies/${id}/tray`),

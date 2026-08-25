@@ -118,6 +118,10 @@ export default function CompetitiveLandscapeView({
   const indirect = data.competitors.filter((c) => c.competitor_type === "indirect");
   const isFrance = (c: LandscapeCompetitor) => (c.country || "").toLowerCase().includes("france");
   const noDirectInFrance = direct.length > 0 && !direct.some(isFrance) && data.geographies.some((g) => g.toLowerCase() === "france");
+  // Logos are a dashboard/tray affordance (CompetitorGrid) - the printable/downloadable
+  // memo document never gets them, per analyst feedback that a memo should read as a
+  // written document, not a card grid. The business-model description, on the other
+  // hand, belongs in the memo - it's the actual analytical content, not chrome.
   const competitorCols = data.competitors.length > 0 && (
     <div className="competitor-type-cols">
       {direct.length > 0 && (
@@ -126,9 +130,10 @@ export default function CompetitiveLandscapeView({
           {noDirectInFrance && <div className="competitor-type-row-empty">Aucun concurrent direct identifié en France.</div>}
           {direct.map((c, i) => (
             <div key={i} className="competitor-type-row">
-              <CompetitorLogo domain={c.domain} />
+              {!isDoc && <CompetitorLogo domain={c.domain} />}
               <span className="name">{c.name}</span>
               <span className="meta">{[c.size, c.country || "Pays non précisé"].filter(Boolean).join(" · ")}</span>
+              {c.description && <div className="competitor-desc-line">{c.description}</div>}
             </div>
           ))}
         </div>
@@ -138,9 +143,10 @@ export default function CompetitiveLandscapeView({
           <div className="type-heading">Concurrents indirects</div>
           {indirect.map((c, i) => (
             <div key={i} className="competitor-type-row">
-              <CompetitorLogo domain={c.domain} />
+              {!isDoc && <CompetitorLogo domain={c.domain} />}
               <span className="name">{c.name}</span>
               <span className="meta">{[c.size, c.country || "Pays non précisé"].filter(Boolean).join(" · ")}</span>
+              {c.description && <div className="competitor-desc-line">{c.description}</div>}
             </div>
           ))}
         </div>
