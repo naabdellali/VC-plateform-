@@ -23,6 +23,7 @@ from app.services.evidence_store import add_evidence
 from app.services.llm_client import get_llm_client
 from app.services.search_client import get_search_client
 from app.services.reasoning.base import ReasoningTrace, upsert_module_result
+from app.services.reasoning.confidence import mapped_and_capped_confidence
 from app.services.reasoning.red_flags import add_red_flag
 
 MODULE = "traction"
@@ -104,9 +105,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         value=synth_payload.get("answer", "Impossible de vérifier indépendamment."),
         origin=EvidenceOrigin.platform_inference,
         source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
-        confidence={"high": Confidence.high, "medium": Confidence.medium, "low": Confidence.low}.get(
-            synth_payload.get("confidence"), Confidence.unverified
-        ),
+        confidence=mapped_and_capped_confidence(synth_payload.get("confidence"), len(all_sources)),
         methodology="LLM synthesis over web-search results restricted to retrieved sources.",
     )
     trace.add("verify", synth_payload, [synth_ev.id])

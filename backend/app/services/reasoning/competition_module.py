@@ -17,6 +17,7 @@ from app.services.evidence_store import add_evidence
 from app.services.llm_client import get_llm_client
 from app.services.search_client import get_search_client
 from app.services.reasoning.base import ReasoningTrace, upsert_module_result
+from app.services.reasoning.confidence import mapped_and_capped_confidence
 from app.services.reasoning.red_flags import add_red_flag
 
 MODULE = "competition"
@@ -65,8 +66,31 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             deck_value=None, platform_value=None, discrepancy_explanation=None, trace=trace, llm_mode=llm.mode,
         )
         return
-    landscape_q = f"Who are the direct and indirect competitors in {company.sector}, including incumbents and adjacent solutions, by function and by region - keep France, the rest of Europe, and the United States as three distinct regions, never merged?"
-    q1 = llm.generate_search_queries(landscape_q, {"sector": company.sector, "hq_country": company.hq_country})
+
+    # Read the precise target segment Market already identified from the deck (same
+    # cross-module dependency pattern used below for Technology's read into Moat) - fixes
+    # the same genericness issue flagged for Market ("sizing the broad category, not the
+    # niche") which applies just as much to competitor mapping: "who competes in insurance
+    # software" surfaces every insurtech vendor, while "who competes in parametric
+    # underwriting for agricultural insurers" surfaces the actual comparable set. `sector`
+    # is kept as the explicit fallback anchor - segment_description narrows WHERE to look
+    # first, it never replaces sector in the query entirely.
+    market_mr = db.query(ModuleResult).filter_by(company_id=company.id, module="market").first()
+    segment_description = None
+    if market_mr and market_mr.platform_value:
+        try:
+            segment_description = (json.loads(market_mr.platform_value) or {}).get("segment_description")
+        except (ValueError, TypeError):
+            segment_description = None
+    landscape_target = segment_description or company.sector
+    landscape_q = (
+        f"Who are the direct and indirect competitors specifically in this segment: {landscape_target}"
+        + (f" (a narrower segment within the broader {company.sector} category)" if segment_description else "")
+        + ", including incumbents and adjacent solutions, by function and by region - keep France, the rest of "
+        "Europe, and the United States as three distinct regions, never merged? If the segment above is too "
+        f"narrow to find direct hits, also include competitors from the broader {company.sector} category."
+    )
+    q1 = llm.generate_search_queries(landscape_q, {"sector": company.sector, "segment_description": segment_description, "hq_country": company.hq_country})
     queries = (q1.parsed or {}).get("queries", [landscape_q]) if q1.parsed else [landscape_q]
 
     landscape_sources = []
@@ -83,9 +107,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         value=landscape_payload.get("answer", "Impossible de vérifier indépendamment."),
         origin=EvidenceOrigin.platform_inference,
         source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
-        confidence={"high": Confidence.high, "medium": Confidence.medium, "low": Confidence.low}.get(
-            landscape_payload.get("confidence"), Confidence.unverified
-        ),
+        confidence=mapped_and_capped_confidence(landscape_payload.get("confidence"), len(landscape_sources)),
         methodology="LLM synthesis over web-search results restricted to retrieved sources.",
     )
     trace.add("research", {"queries": queries, "sources_found": len(landscape_sources), "search_mode": search.mode}, [landscape_ev.id])
@@ -114,9 +136,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
                 "in_deck": any(name.lower() in (dn or "").lower() or (dn or "").lower() in name.lower() for dn in deck_named),
             })
         if competitors_struct:
-            comp_conf = {"high": Confidence.high, "medium": Confidence.medium, "low": Confidence.low}.get(
-                comp_payload.get("confidence"), Confidence.unverified
-            )
+            comp_conf = mapped_and_capped_confidence(comp_payload.get("confidence"), len(landscape_sources))
             comp_ev = add_evidence(
                 db, company_id=company.id, module=MODULE,
                 claim="Independently identified named competitors",
@@ -138,7 +158,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
     moat_platform_value = None
     if landscape_sources:
         matrix_result = llm.build_competitive_landscape(
-            {"sector": company.sector, "hq_country": company.hq_country, "company_name": company.name},
+            {"sector": company.sector, "segment_description": segment_description, "hq_country": company.hq_country, "company_name": company.name},
             landscape_sources, deck_text=deck.raw_text if deck else None,
         )
         matrix_payload = matrix_result.parsed or {"insufficient": True}
@@ -203,7 +223,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             tech_payload = {}
     ocean_type_for_moat = (landscape_struct or {}).get("ocean", {}).get("type") if landscape_struct else None
     moat_result = llm.evaluate_moat(
-        {"sector": company.sector, "hq_country": company.hq_country, "company_name": company.name},
+        {"sector": company.sector, "segment_description": segment_description, "hq_country": company.hq_country, "company_name": company.name},
         tech_payload, competitors_struct, ocean_type_for_moat, landscape_sources,
     )
     moat_payload = moat_result.parsed or {"insufficient": True}
@@ -239,11 +259,11 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
     # --- 3. collision simulation: incumbent threat (spec section 9) -------
     collision_q = (
         f"Has any large, well-capitalized incumbent already launched, tested, or explicitly abandoned a product "
-        f"similar to a {company.sector or ''} startup's offering? Why did they stop, if they did? If a source "
+        f"similar to a {landscape_target or ''} startup's offering? Why did they stop, if they did? If a source "
         f"identifies the specific company/entity, name it explicitly in the answer - do not describe it vaguely "
         f"as 'a competitor' or 'a well-funded player' when a source gives you an actual name."
     )
-    q2 = llm.generate_search_queries(collision_q, {"sector": company.sector})
+    q2 = llm.generate_search_queries(collision_q, {"sector": company.sector, "segment_description": segment_description})
     collision_queries = (q2.parsed or {}).get("queries", [collision_q]) if q2.parsed else [collision_q]
     collision_sources = []
     for q in collision_queries[:2]:
@@ -258,9 +278,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         claim="Incumbent collision / abandonment check", value=collision_payload.get("answer"),
         origin=EvidenceOrigin.platform_inference,
         source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
-        confidence={"high": Confidence.high, "medium": Confidence.medium, "low": Confidence.low}.get(
-            collision_payload.get("confidence"), Confidence.unverified
-        ),
+        confidence=mapped_and_capped_confidence(collision_payload.get("confidence"), len(collision_sources)),
         methodology="LLM synthesis over web-search results restricted to retrieved sources.",
     )
     trace.add("verify", collision_payload, [collision_ev.id])

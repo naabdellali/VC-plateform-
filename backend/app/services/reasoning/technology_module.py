@@ -26,6 +26,7 @@ from app.services.evidence_store import add_evidence
 from app.services.llm_client import get_llm_client
 from app.services.search_client import get_search_client
 from app.services.reasoning.base import ReasoningTrace, upsert_module_result
+from app.services.reasoning.confidence import mapped_and_capped_confidence
 from app.services.reasoning.red_flags import add_red_flag
 from app.services.reasoning.triggers import Signal, evaluate
 
@@ -96,9 +97,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
                 claim=q, value=payload.get("answer", "Impossible de vérifier indépendamment."),
                 origin=EvidenceOrigin.platform_inference,
                 source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
-                confidence={"high": Confidence.high, "medium": Confidence.medium, "low": Confidence.low}.get(
-                    payload.get("confidence"), Confidence.unverified
-                ),
+                confidence=mapped_and_capped_confidence(payload.get("confidence"), len(sources)),
                 methodology="LLM synthesis over web-search results restricted to retrieved sources - triggered by a detected third-party dependency, not run generically.",
             )
             research_ev_ids.append(ev.id)

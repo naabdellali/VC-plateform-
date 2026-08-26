@@ -531,6 +531,46 @@ class LlmClient:
         return self._call_json(system, deck_text[:60000])
 
     # ------------------------------------------------------------------
+    # 1b2. Precise target-segment identification - fixes a real quality
+    #      problem flagged directly by an analyst: the market module was
+    #      sizing "the insurance software market" for a company that
+    #      actually builds parametric underwriting tools for agricultural
+    #      insurers, because `sector` (whether typed by the analyst in the
+    #      upload form or inferred above) is often just a broad category,
+    #      and every downstream TAM/SAM/SOM query was anchored on that
+    #      string alone. `sector` still drives the FALLBACK/adjacent-market
+    #      query (a real safety net when no source covers the true niche -
+    #      see estimate_tam_sam_som's rule 2); this method's job is to give
+    #      market_module something narrower to try FIRST: the specific
+    #      buyer type, vertical, and use-case the deck itself describes,
+    #      so the primary search actually targets that segment instead of
+    #      the broad industry every company in the space would share.
+    #      Always runs, regardless of whether `sector` came from the
+    #      workspace form or was inferred - a manually-typed broad sector
+    #      must not skip this narrowing step.
+    # ------------------------------------------------------------------
+    def identify_target_segment(self, deck_text: str, sector: str | None) -> LlmResult:
+        system = (
+            "Read this pitch deck's raw text and identify the PRECISE sub-segment of the market this "
+            "company actually targets - not the broad industry category, but the specific niche defined "
+            "by the exact product/service category, the specific buyer type or vertical, and any explicit "
+            "constraint the deck states (geography, company size, use case, regulatory context). Be as "
+            "narrow and specific as the deck's own content supports - never default to the broad category "
+            "given to you as a starting point. For example, if the broad category is 'insurance software', "
+            "a good segment description is 'parametric underwriting and claims software for agricultural "
+            "insurers', not 'insurance software' restated. If the deck genuinely does not give enough detail "
+            "to narrow beyond the broad category, say so honestly rather than inventing specificity. "
+            'Return JSON: {"segment_description": "one precise sentence naming the exact niche (buyer type, '
+            'product category, use case)" or null if the deck does not support narrowing beyond the broad '
+            'category, "buyer_persona": "who specifically buys this" or null, '
+            '"confidence": "high"|"medium"|"low"}'
+        )
+        user = f"Broad category (starting point, do not just restate it): {sector or 'unknown'}\n\nDeck text:\n{deck_text[:60000]}"
+        if self.mode == "mock":
+            return LlmResult(mode="mock", text=MOCK_DISCLAIMER, parsed={"segment_description": None, "buyer_persona": None, "confidence": "unverified"})
+        return self._call_json(system, user, max_tokens=300)
+
+    # ------------------------------------------------------------------
     # 1c. Technology architecture / third-party dependency extraction (VC
     #     Expert Questioning Framework, Technology dimension, section 2.1-2.2).
     #     Deck-text only, like extract_claims/infer_sector - this is a
@@ -855,9 +895,17 @@ class LlmClient:
             "cite it with a footnote number. Never state a market-size figure that is not grounded in a source. "
             "2) If no source directly covers the company's exact niche, aggregate 2-3 clearly adjacent/comparable "
             "markets found in the sources, and say so explicitly in your reasoning. "
-            "3) SAM should apply a geography/segment percentage that itself comes from a source when possible "
-            "(e.g. 'North America is 31% of this market, per source [n]'); if you must estimate it without a "
-            "direct source, say so explicitly and do not attach a footnote to that specific number. "
+            "3) SAM must reflect the company's ACTUAL addressable segment - company_context includes a "
+            "'segment_description' (the specific buyer type/vertical/use-case this company targets, more precise "
+            "than the broad 'sector' category) whenever the deck supported identifying one. Narrow TAM down to "
+            "that segment first (citing a segment-specific source when one exists, or reasoning analytically from "
+            "how the sources describe that vertical's share of the broader category - label that explicitly as "
+            "analysis, not a citation, when you do), THEN apply any additional geography cut on top of that "
+            "already-narrowed figure. Do not stop at a geography split of the broad TAM and call it SAM - a "
+            "geography cut of the wrong (too broad) base is not a fix. If segment_description is null, say so "
+            "explicitly in your SAM reasoning ('faute de segment plus précis identifiable dans le deck, ce SAM "
+            "reste une simple coupe géographique du TAM') rather than silently treating a geography cut as if it "
+            "were segment-level precision. "
             "4) SOM (realistically capturable over 3-5 years) should apply a conservative, clearly-labelled "
             "capture-rate range (a standard analyst convention, e.g. 1-3% for an early/young category) - label "
             "this explicitly as a methodology convention, NOT a cited fact, and do not attach a footnote to it. "
@@ -908,7 +956,10 @@ class LlmClient:
             "as-is). "
             f"First, in one or two sharp sentences, say what market {company_name} operates in and, if it "
             "clearly serves more than one segment/sub-market, name them - written the way one analyst briefs "
-            "another, not a Wikipedia summary. "
+            "another, not a Wikipedia summary. If company_context includes a 'segment_description', anchor this "
+            "on that precise segment (not the broader 'sector' category alone) - the value chain and competitor "
+            "mapping below should be built around who actually competes in THAT segment, falling back to the "
+            "broader sector only where the segment itself doesn't give you enough to work with. "
             "Then break the value chain into 3-5 functions/capabilities relevant to this category (e.g. for "
             "an AI tooling company: governance, observability, guardrails, gateway, usage billing - adapt to "
             "the actual category). For each function, list which named players cover it in each of THREE "

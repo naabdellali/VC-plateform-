@@ -17,6 +17,17 @@ The deck's own market-size claim (if any) is still extracted, but it is
 now used only for the "compare to what the deck claims" section, shown
 LAST rather than leading the page.
 
+Before sizing anything, the module also identifies the company's precise
+target SEGMENT from the deck (identify_target_segment) - not just
+`company.sector`, which is often a broad category (whether typed by the
+analyst in the upload form or inferred from the deck) shared by every
+company in the space. Concretely: "insurance software" is a category;
+"parametric underwriting and claims software for agricultural insurers"
+is the segment. The segment description drives the PRIMARY TAM search
+and anchors SAM's narrowing in estimate_tam_sam_som's prompt; `sector`
+is kept as the explicit fallback/adjacent-market anchor, never dropped -
+just no longer the first and only thing searched for.
+
 `recalculate()` remains available as a human-in-the-loop override, for
 when an analyst wants to substitute their own bottom-up/top-down inputs
 for the platform's automatic estimate.
@@ -103,15 +114,59 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             trace=trace, llm_mode=llm.mode,
         )
         return
-    tam_q = (
-        f"What is the total addressable market (TAM) size and growth forecast for the following industry: "
-        f"{company.sector}? If no report covers this exact niche, include the closest adjacent or comparable "
-        "market categories and their sizes."
+
+    # --- 2a. narrow "sector" (often a broad category, whether typed by the analyst in the
+    #         upload form or inferred above) down to the precise sub-segment the deck actually
+    #         describes - fixes a real quality issue: sizing "the insurance software market" for
+    #         a company that specifically builds parametric underwriting tools for agricultural
+    #         insurers. Always runs (not conditional on how `sector` was set), so a manually-typed
+    #         broad sector doesn't skip this narrowing step. `sector` itself is kept as the
+    #         explicit fallback/adjacent-market anchor when the deck doesn't support narrowing
+    #         further - it never gets dropped, just no longer the FIRST thing searched for.
+    segment_result = llm.identify_target_segment(deck.raw_text, company.sector)
+    segment_payload = segment_result.parsed or {}
+    segment_description = segment_payload.get("segment_description")
+    buyer_persona = segment_payload.get("buyer_persona")
+    segment_ev = add_evidence(
+        db, company_id=company.id, module=MODULE,
+        claim="Segment de marché précis ciblé par l'entreprise (identifié à partir du deck)",
+        value=segment_description or "Non déterminable au-delà de la catégorie large - le deck ne donne pas assez de détail pour préciser davantage.",
+        origin=EvidenceOrigin.company_claim, source_tier=SourceTier.deck,
+        confidence={"high": Confidence.high, "medium": Confidence.medium, "low": Confidence.low}.get(
+            segment_payload.get("confidence"), Confidence.unverified
+        ),
+        source_name=f"Pitch deck ({deck.filename})",
     )
-    geo_q = f"What percentage share of the {company.sector} market is in North America vs Europe vs rest of world?"
+    trace.add("extract", {"segment_description": segment_description, "buyer_persona": buyer_persona}, [segment_ev.id])
+    context["segment_description"] = segment_description
+    context["buyer_persona"] = buyer_persona
+
+    if segment_description:
+        tam_q = (
+            f"What is the total addressable market (TAM) size and growth forecast for this specific market "
+            f"segment: {segment_description}? This is a narrower segment within the broader "
+            f"'{company.sector}' category - search for the segment specifically first. Only if no report "
+            f"covers this exact niche, fall back to the closest adjacent or comparable market categories "
+            f"(including the broader '{company.sector}' category itself) and their sizes."
+        )
+        # A dedicated broad-category query alongside the segment one, so the LLM still has
+        # adjacent-market sources to fall back on per estimate_tam_sam_som's rule 2 - narrowing
+        # the PRIMARY query must not starve the fallback path of sources entirely.
+        broad_q = f"What is the total addressable market (TAM) size for the broader {company.sector} category?"
+    else:
+        tam_q = (
+            f"What is the total addressable market (TAM) size and growth forecast for the following industry: "
+            f"{company.sector}? If no report covers this exact niche, include the closest adjacent or comparable "
+            "market categories and their sizes."
+        )
+        broad_q = None
+    geo_q = (
+        f"What percentage share of the {segment_description or company.sector} market is in "
+        "North America vs Europe vs rest of world?"
+    )
     q1 = llm.generate_search_queries(tam_q, context)
     queries = (q1.parsed or {}).get("queries", [tam_q]) if q1.parsed else [tam_q]
-    queries = list(queries[:3]) + [geo_q]
+    queries = list(queries[:3]) + ([broad_q] if broad_q else []) + [geo_q]
 
     sources = []
     for q in queries:
@@ -128,7 +183,11 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         payload = {"insufficient": True, "reason": "No web-search results were available to ground a TAM/SAM/SOM estimate."}
 
     structured = None
-    platform_value = None
+    # Segment info is recorded on platform_value regardless of whether TAM/SAM/SOM itself
+    # succeeded - other modules (e.g. competition_module) read it the same way
+    # competition_module already reads Technology's platform_value, and identifying the
+    # segment doesn't depend on whether market-sizing sources were actually found.
+    platform_value = json.dumps({"segment_description": segment_description, "buyer_persona": buyer_persona})
 
     if payload.get("insufficient"):
         status = ModuleStatus.insufficient_evidence
@@ -155,6 +214,8 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             "sam": payload.get("sam") or {},
             "som": payload.get("som") or {},
             "footnotes": footnotes,
+            "segment_description": segment_description,
+            "buyer_persona": buyer_persona,
         }
 
         calc_ev = add_evidence(

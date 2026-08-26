@@ -22,6 +22,7 @@ from app.services.llm_client import get_llm_client
 from app.services.search_client import get_search_client
 from app.services.pappers_client import get_pappers_client
 from app.services.reasoning.base import ReasoningTrace, upsert_module_result
+from app.services.reasoning.confidence import mapped_and_capped_confidence
 from app.services.reasoning.red_flags import add_red_flag
 
 MODULE = "founders"
@@ -136,8 +137,12 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         synth = llm.synthesize_research(question, sources)
         payload = synth.parsed or {}
         confidence_str = payload.get("confidence", "unverified")
+        capped_confidence = mapped_and_capped_confidence(confidence_str, len(sources))
         classification = "reported_unverified"
-        if confidence_str == "high":
+        # "verified" requires the CAPPED confidence to actually be high, not just the
+        # model's raw self-report - a "high confidence" claim resting on a single source
+        # is not verified, it's the same reported-but-unverified status as any other thin read.
+        if capped_confidence == Confidence.high:
             classification = "verified"
         elif payload.get("conflicting"):
             classification = "contradicted"
@@ -147,7 +152,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             claim=f"Verification of: {c.get('claim')}", value=payload.get("answer"),
             origin=EvidenceOrigin.platform_inference,
             source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
-            confidence={"high": Confidence.high, "medium": Confidence.medium, "low": Confidence.low}.get(confidence_str, Confidence.unverified),
+            confidence=capped_confidence,
             methodology="LLM synthesis over web-search results restricted to retrieved sources.",
         )
         verification_evidence_ids.append(vev.id)
@@ -196,9 +201,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             claim=f"Recherche web ouverte : {person['name']}", value=bg_answer,
             origin=EvidenceOrigin.platform_inference,
             source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
-            confidence={"high": Confidence.high, "medium": Confidence.medium, "low": Confidence.low}.get(
-                bg_payload.get("confidence"), Confidence.unverified
-            ),
+            confidence=mapped_and_capped_confidence(bg_payload.get("confidence"), len(bg_sources)),
             methodology="LLM synthesis over independent web-search results (not tied to a specific deck claim) - general background/reputation scan.",
         )
         background_evidence_ids.append(bev.id)

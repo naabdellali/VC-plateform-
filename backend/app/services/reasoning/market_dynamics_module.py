@@ -20,6 +20,7 @@ from app.services.evidence_store import add_evidence
 from app.services.llm_client import get_llm_client
 from app.services.search_client import get_search_client
 from app.services.reasoning.base import ReasoningTrace, upsert_module_result
+from app.services.reasoning.confidence import cap_confidence_by_source_count
 from app.services.reasoning.red_flags import add_red_flag
 
 MODULE = "market_dynamics"
@@ -107,7 +108,7 @@ def run_auto(db: Session, company: Company, deck: Deck | None = None) -> None:
         value=json.dumps(dynamics_struct), value_type="market_dynamics_json",
         origin=EvidenceOrigin.platform_inference,
         source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
-        confidence=Confidence.medium,
+        confidence=cap_confidence_by_source_count(Confidence.medium, len(sources)),
         methodology="LLM synthesis over web-search results restricted to retrieved sources; a claim is only kept if a source supports it.",
     )
     trace.add("calculate", dynamics_struct, [ev.id])

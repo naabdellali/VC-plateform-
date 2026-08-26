@@ -39,6 +39,7 @@ from app.services.evidence_store import add_evidence
 from app.services.llm_client import get_llm_client
 from app.services.search_client import get_search_client
 from app.services.reasoning.base import ReasoningTrace, upsert_module_result
+from app.services.reasoning.confidence import cap_confidence_by_source_count
 
 MODULE = "valuation"
 
@@ -164,6 +165,12 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
             "source_url": src["url"] if src else None, "source_name": src["title"] if src else None,
         })
 
+    # Comps confidence is capped by how many sources actually back the multiple range -
+    # a model reporting confidence in a multiple derived from a single thin source is
+    # capped down, same transversal rule applied across every other reasoning module.
+    multiple_confidence = cap_confidence_by_source_count(
+        Confidence.medium if llm.mode == "live" else Confidence.unverified, len(sources)
+    )
     multiple_ev = add_evidence(
         db, company_id=company.id, module=MODULE,
         claim=f"Fourchette de multiple de valorisation comparable ({multiple_basis})",
@@ -171,7 +178,7 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         value_type="multiple_range_json",
         origin=EvidenceOrigin.platform_inference,
         source_tier=SourceTier.llm_inference if llm.mode == "live" else SourceTier.not_applicable,
-        confidence=Confidence.medium if llm.mode == "live" else Confidence.unverified,
+        confidence=multiple_confidence,
         methodology="Synthèse LLM à partir de sources de recherche web restreintes aux résultats obtenus (rounds/M&A comparables).",
         supporting_excerpt=multiples_payload.get("reasoning"),
     )
@@ -184,7 +191,10 @@ def run_auto(db: Session, company: Company, deck: Deck) -> None:
         claim="Valorisation implicite (comparables x traction déclarée)",
         value=json.dumps(implied), value_type="valuation_range_json",
         origin=EvidenceOrigin.platform_calculation, source_tier=SourceTier.calculation,
-        confidence=Confidence.medium if llm.mode == "live" else Confidence.unverified,
+        # Inherits the multiple's own (already source-capped) confidence rather than
+        # re-deriving one independently - a calculation is never more trustworthy than
+        # the sourced input it was computed from.
+        confidence=multiple_confidence,
         methodology=(
             f"{_fmt_eur(revenue)} ({multiple_basis} déclaré, non vérifié) x multiple comparable "
             f"{low_multiple:g}-{high_multiple:g}x."
