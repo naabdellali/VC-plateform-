@@ -1038,6 +1038,44 @@ class LlmClient:
         return self._call_json(system, user, max_tokens=1800)
 
     # ------------------------------------------------------------------
+    # 3a4. Comps-based valuation multiple range (spec roadmap: "Valuation
+    #      & Return/Exit scenarios"). The LLM's only job here is to find
+    #      and synthesize a defensible revenue-multiple range from cited
+    #      sources - never to invent a company-specific valuation figure.
+    #      Everything downstream (implied valuation, scenario projections)
+    #      is deterministic arithmetic in calc/valuation.py.
+    # ------------------------------------------------------------------
+    def estimate_valuation_multiples(self, company_context: dict, sources: list[dict]) -> LlmResult:
+        system = (
+            "You are a VC analyst estimating a defensible revenue-multiple range (for a comps-based "
+            "valuation) for a startup, using ONLY the provided web-search sources. Rules: "
+            "1) The multiple range must be traceable to the sources - recent comparable financing "
+            "rounds, sector valuation reports, or public-market comps for the same sector and stage. "
+            "Cite each with a footnote number. Never state a multiple that is not grounded in a source. "
+            "2) If sources cover a close-but-not-identical sector/stage, use them and say so explicitly "
+            "rather than refusing. "
+            "3) State clearly which revenue base the multiple applies to (ARR is the default assumption "
+            "for a SaaS company unless a source implies otherwise). "
+            "4) If the sources are too thin or irrelevant to support any defensible range, return "
+            '{"insufficient": true, "reason": "..."} instead of guessing. '
+            "5) Write the reasoning field in French, the way you'd explain it out loud to a colleague: "
+            "short simple sentences, plain corporate vocabulary, inline footnote markers like [1], [2] "
+            "placed right after the figure they support. Never mix English words into French sentences "
+            "except a standard VC term (e.g. keep 'ARR' or 'multiple' as-is). "
+            'Return ONLY JSON: {"insufficient": false, "low_multiple": number, "high_multiple": number, '
+            '"multiple_basis": "ARR"|"MRR"|"revenue", '
+            '"reasoning": "2-4 short French sentences with [1][2] markers", '
+            '"footnotes": [{"n": 1, "source_index": 0, "detail": "Source name, key figure quoted, short"}]}'
+        )
+        user = f"Company context: {json.dumps(company_context)}\n\nSources:\n" + json.dumps(sources, indent=2)[:14000]
+        if self.mode == "mock":
+            return LlmResult(
+                mode="mock", text=MOCK_DISCLAIMER,
+                parsed={"insufficient": True, "reason": "No live research/LLM provider configured - mock mode."},
+            )
+        return self._call_json(system, user, max_tokens=1200)
+
+    # ------------------------------------------------------------------
     # 3b. Structured competitor identification - used to render an actual
     #     comparison grid in the UI instead of a wall of prose. Strictly
     #     source-restricted: a competitor only appears here if a source
